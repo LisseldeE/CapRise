@@ -4,18 +4,19 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import (
     Qt, QPoint, QPropertyAnimation, QEasingCurve, QEvent,
-    QAbstractNativeEventFilter, Signal
+    QAbstractNativeEventFilter, Signal, QTimer
 )
 from PySide6.QtGui import QPainter, QColor, QGuiApplication, QKeyEvent, QCursor
 from modules.icons import (
     ICON_SCREENSHOT, ICON_ANNOTATION, ICON_TRANSLATE, ICON_SETTINGS,
-    ICON_CLOSE, ICON_CLIPBOARD, ICON_SEARCH
+    ICON_CLOSE, ICON_CLIPBOARD, ICON_SEARCH, ICON_TIMER
 )
 from modules.i18n import I18n
 from modules.family import FamilyWindowRegistry
 from modules.global_mouse_hook import GlobalMouseHook
 from modules.widgets import GlassIconButton, paint_pill
 from modules.config import Config
+from modules.timer import TimerDisplay, TimerManager, TimerNoticeOverlay
 
 # Windows constants
 WM_KEYDOWN = 0x0100
@@ -54,6 +55,12 @@ class CapsuleBar(QWidget):
 
     hide_family_requested = Signal()
 
+    # Base capsule size without the timer strip (matches the pre-timer fixed
+    # 396x56 layout); the strip extends the width by its own width + one
+    # inter-item gap when a timer is active.
+    BASE_WIDTH = 396
+    BASE_HEIGHT = 56
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowFlags(
@@ -62,7 +69,7 @@ class CapsuleBar(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         # Never steal focus on show — the user's caret stays in their input.
         self.setAttribute(Qt.WA_ShowWithoutActivating)
-        self.setFixedSize(396, 56)
+        self.setFixedHeight(self.BASE_HEIGHT)
 
         self._animating = False
         self._pending_hide = False
@@ -93,6 +100,21 @@ class CapsuleBar(QWidget):
         layout.setSpacing(10)
         layout.setContentsMargins(14, 6, 14, 6)
 
+        # Timer countdown strip: hidden until a timer starts, then the capsule
+        # extends to its left (same glass plate, hairline divider) and the
+        # whole bar re-centers on screen.
+        self.timer = TimerManager(self)
+        self.timer_display = TimerDisplay(self)
+        self.timer_display.setVisible(False)
+        self.timer_display.pause_toggled.connect(self.timer.toggle_pause)
+        self.timer_display.reset_requested.connect(self.timer.reset)
+        self.timer_display.close_requested.connect(self.timer.reset)
+        self.timer.tick.connect(self._refresh_timer_display)
+        self.timer.phase_changed.connect(self._refresh_timer_display)
+        self.timer.state_changed.connect(self._on_timer_state)
+        self.timer.finished.connect(self._on_timer_finished)
+        layout.addWidget(self.timer_display)
+
         # The five tool buttons are built in the user-defined order (stored
         # in config["tool_order"]); Settings and Close stay pinned at the end.
         tool_specs = {
@@ -101,6 +123,7 @@ class CapsuleBar(QWidget):
             "translate": (ICON_TRANSLATE, "translate"),
             "clipboard": (ICON_CLIPBOARD, "clipboard"),
             "search": (ICON_SEARCH, "search"),
+            "timer": (ICON_TIMER, "timer"),
         }
         order = Config().get(
             "tool_order",
@@ -143,9 +166,86 @@ class CapsuleBar(QWidget):
         self.btn_translate = self._tool_buttons["translate"]
         self.btn_clipboard = self._tool_buttons["clipboard"]
         self.btn_search = self._tool_buttons["search"]
+        self.btn_timer = self._tool_buttons["timer"]
 
         # Apply the user's per-tool show/hide choice (config["hidden_tools"]).
         self.set_tools_hidden(Config().get("hidden_tools", []))
+        # Establish the base width (timer strip hidden at this point).
+        self.setFixedWidth(self.BASE_WIDTH)
+
+    # ----- timer strip -----
+
+    def _sync_timer_width(self):
+        """Resize the capsule to fit the timer strip (or back to base width)
+        and keep it horizontally centered. Called only when the strip shows or
+        hides — the monospace HH:MM:SS keeps the width constant while ticking,
+        so there is no per-second churn or re-centering."""
+        # isHidden() (not isVisible()) so the decision is independent of
+        # whether the parent capsule itself is currently shown.
+        if not self.timer_display.isHidden():
+            # Reserve the layout's full ideal width. The tool buttons are all
+            # fixed-size, so this is the only width that guarantees the timer
+            # strip receives its complete sizeHint — a fixed BASE_WIDTH plus
+            # the strip would let the 8 buttons squeeze the strip below its
+            # minimum and push the label under the reset/stop controls.
+            self.setFixedWidth(self.layout().sizeHint().width())
+        else:
+            self.setFixedWidth(self.BASE_WIDTH)
+        if self.isVisible():
+            self._recenter()
+
+    def _recenter(self):
+        """Re-center horizontally on the current screen, keeping the Y."""
+        screen = self._get_screen_geo()
+        self.move((screen.width() - self.width()) // 2 + screen.x(), self.y())
+
+    def _refresh_timer_display(self, *_):
+        phase = self.timer.phase()
+        if phase is None:
+            return
+        self.timer_display.show_phase(
+            phase, self.timer.remaining(), self.timer.is_paused())
+
+    def _on_timer_state(self, state):
+        if state == "running":
+            self.timer_display.setVisible(True)
+            # Set the time text first so the width sync below sizes the
+            # capsule to the actual content (the label is now dynamic width).
+            self._refresh_timer_display()
+            self._sync_timer_width()
+            # A timer started from the capsule is already visible; this also
+            # covers edge cases where the strip must surface the countdown.
+            self.show_capsule()
+        elif state == "paused":
+            self._refresh_timer_display()
+            # The pause label can be narrower than the running one (e.g.
+            # 倒计时 -> 暂停); re-fit the capsule so the gaps stay balanced.
+            self._sync_timer_width()
+        elif state == "idle":
+            # Reset / countdown finished: retract the strip.
+            self.timer_display.setVisible(False)
+            self._sync_timer_width()
+
+    def _on_timer_finished(self, phase):
+        """A phase completed: beep + transient notice in the strip. Pomodoro
+        auto-continues into the next phase; a plain countdown additionally
+        pops an independent notice card (visible even if the capsule is
+        hidden) and then retracts the strip."""
+        QApplication.beep()
+        key = {"focus": "timer_finished_focus",
+               "break": "timer_finished_break"}.get(
+                   phase, "timer_finished_countdown")
+        self.timer_display.show_notice(I18n.tr(key))
+        if phase == "countdown":
+            self._timer_notice = TimerNoticeOverlay(I18n.tr(key))
+            self._timer_notice.show()
+            QTimer.singleShot(2700, self._retract_timer_strip)
+
+    def _retract_timer_strip(self):
+        # If a new timer was started meanwhile, keep the strip up.
+        if not self.timer.is_active():
+            self.timer_display.setVisible(False)
+            self._sync_timer_width()
 
     def set_tools_hidden(self, hidden_keys):
         """Show/hide tool buttons per the `hidden_tools` config list.

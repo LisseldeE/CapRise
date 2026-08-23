@@ -114,6 +114,27 @@ ICON_CHECK = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill
   <polyline points="20 6 9 17 4 12"/>
 </svg>"""
 
+# --- Timer feature icons ---
+
+ICON_TIMER = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="12" cy="13" r="8"/>
+  <path d="M12 9v4l2.5 2.5"/>
+  <path d="M9 2h6"/>
+</svg>"""
+
+ICON_ROTATE_CCW = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"/>
+  <path d="M3 3v5h5"/>
+</svg>"""
+
+ICON_PAUSE = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M8 5v14M16 5v14"/>
+</svg>"""
+
+ICON_PLAY = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M7 5l12 7-12 7z"/>
+</svg>"""
+
 
 def icon_svg(name):
     icons = {
@@ -136,5 +157,9 @@ def icon_svg(name):
         "network": ICON_NETWORK,
         "room": ICON_ROOM,
         "check": ICON_CHECK,
+        "timer": ICON_TIMER,
+        "rotate_ccw": ICON_ROTATE_CCW,
+        "pause": ICON_PAUSE,
+        "play": ICON_PLAY,
     }
     return icons.get(name)

@@ -18,6 +18,7 @@ from modules.translate import TranslateOverlay
 from modules.settings import SettingsDialog, apply_autostart
 from modules.clipboard_manager import ClipboardManager
 from modules.search import SearchWindow
+from modules.timer import TimerDialog
 
 
 def set_app_user_model_id():
@@ -176,6 +177,8 @@ class CapRiseApp:
         # hide_family_requested (capsule side) and dismiss the search card too.
         self.capsule.btn_search.clicked.connect(self._on_search)
         self.capsule.hide_family_requested.connect(self._close_search)
+        # Timer: open the pomodoro/countdown setup dialog.
+        self.capsule.btn_timer.clicked.connect(self._on_timer)
 
     def toggle_capsule(self):
         if self.active_overlay is not None:
@@ -289,6 +292,12 @@ class CapRiseApp:
             # open the new card now that no card is on screen.
             if self._pending_search:
                 self._open_search()
+
+    def _on_timer(self):
+        """Open the pomodoro/countdown setup dialog (a family window, so the
+        capsule stays up). Starting a timer extends the capsule's left strip."""
+        dialog = TimerDialog(self.capsule.timer)
+        dialog.exec()
 
     def _on_settings(self):
         dialog = SettingsDialog(capsule=self.capsule, hotkey_mgr=self.hotkey_mgr)

@@ -203,6 +203,12 @@ class GlassIconButton(QPushButton):
             self._t = 1.0 if self.underMouse() else 0.0
         self._apply_visuals()
 
+    def set_svg(self, svg_content):
+        """Swap the icon glyph (e.g. pause -> play) and drop the cached pixmaps."""
+        self._svg = svg_content
+        self._pix_cache.clear()
+        self.update()
+
     # ----- painting -----
 
     def _icon_pixmap(self, color, size):
