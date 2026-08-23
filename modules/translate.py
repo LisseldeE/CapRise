@@ -13,6 +13,8 @@ clipboard_network.py, so no QThread lifecycle management is required.
 """
 import json
 import threading
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -44,6 +46,26 @@ GOOGLE_URLS = [
 
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0")
+
+# Minimum delay between outgoing translation requests, shared across every
+# worker thread. Google's free endpoint rate-limits unauthenticated requests;
+# spacing them out prevents the bursts that trip HTTP 429 and can get the IP
+# temporarily blocked.
+MIN_REQUEST_INTERVAL = 0.6
+
+_last_request_ts = 0.0
+_request_lock = threading.Lock()
+
+
+def _throttle():
+    """Space translation requests at least MIN_REQUEST_INTERVAL apart."""
+    global _last_request_ts
+    with _request_lock:
+        now = time.monotonic()
+        wait = MIN_REQUEST_INTERVAL - (now - _last_request_ts)
+        if wait > 0:
+            time.sleep(wait)
+        _last_request_ts = time.monotonic()
 
 
 def _selection_color():
@@ -77,13 +99,17 @@ def _google_translate(text, lang):
     """Translate via Google's free endpoint. No API key needed.
 
     Retries across the known hosts because the endpoint is flaky on some
-    networks (connection succeeds but the read times out)."""
+    networks (connection succeeds but the read times out). Every request is
+    throttled so rapid successive translations don't trip the rate limit;
+    on HTTP 429 the code backs off exponentially (1s, 2s) before retrying
+    instead of hammering the endpoint and risking an IP block."""
     params = urllib.parse.urlencode({
         "client": "gtx", "sl": "auto", "tl": lang, "dt": "t", "q": text,
     })
     errors = []
-    for _ in range(2):  # two passes over the host list
+    for attempt in range(2):  # two passes over the host list
         for url in GOOGLE_URLS:
+            _throttle()
             try:
                 req = urllib.request.Request(
                     f"{url}?{params}", headers={"User-Agent": _UA})
@@ -91,6 +117,13 @@ def _google_translate(text, lang):
                     data = json.loads(resp.read().decode("utf-8"))
                 segs = [block[0] for block in data[0] if block and block[0]]
                 return "".join(segs)
+            except urllib.error.HTTPError as e:
+                if e.code == 429:
+                    # Rate-limited: back off before the next attempt.
+                    time.sleep(1 << attempt)  # 1s, then 2s
+                    errors.append(f"HTTP 429 (rate limited): {url}")
+                else:
+                    errors.append(f"{e}")
             except Exception as e:  # noqa: BLE001 - try next host/attempt
                 errors.append(f"{e}")
     raise RuntimeError("; ".join(errors[-3:]) or "google translate failed")
@@ -265,7 +298,7 @@ class LoadingWidget(QWidget):
 
 class _TranslateSignals(QObject):
     ok = Signal(str)
-    failed = Signal(str)  # code: "no_text" | "error"
+    failed = Signal(str, str)  # code: "no_text" | "error", detail
 
 
 # ----- floating result panel -----
@@ -487,10 +520,17 @@ class TranslateResultPanel(QWidget):
         self.copy_btn.show()
         self._relayout()
 
-    def show_state_error(self, code):
+    def show_state_error(self, code, detail=""):
         self._state = "error"
         if code == "no_text":
             msg = I18n.tr("translate_no_text")
+        elif detail:
+            # Surface the concrete failure reason (e.g. a network/timeout
+            # error from the translator or OCR) instead of a bare "failed".
+            # Cap the length so a verbose exception can't balloon the card.
+            if len(detail) > 160:
+                detail = detail[:160] + "…"
+            msg = I18n.tr("translate_failed_detail").format(detail=detail)
         else:
             msg = I18n.tr("translate_failed")
         self.error_label.setText(msg)
@@ -578,9 +618,16 @@ class TranslateResultPanel(QWidget):
             rh = fm.boundingRect(
                 QRect(0, 0, w - m.left() - m.right(), 10000), Qt.TextWordWrap,
                 self.error_label.text()).height()
-            h = m.top() + rh + spacing + self.retry_btn.sizeHint().height() + m.bottom()
+            # The (hidden) copy-header row still consumes one layout spacing
+            # above the message, so count two spacings total (header->message
+            # and message->retry). Otherwise the card comes up short and the
+            # retry button is squeezed below its content height, clipping the
+            # label text vertically.
+            h = (m.top() + spacing + rh + spacing
+                 + self.retry_btn.sizeHint().height() + m.bottom())
         else:  # loading
-            h = m.top() + self.loading.height() + 6 + 18 + m.bottom()
+            h = (m.top() + spacing + self.loading.height() + 6 + 18
+                 + m.bottom())
         h = min(h, avail_h)
 
         self.setFixedSize(w, h)
@@ -749,20 +796,20 @@ class TranslateOverlay(BaseOverlay):
         try:
             text = ocr_image(png)
             if not text:
-                self._emit_safe("failed", "no_text")
+                self._emit_safe("failed", "no_text", "")
                 return
             translated = translate_text(text, target)
             if not translated or not translated.strip():
-                self._emit_safe("failed", "error")
+                self._emit_safe("failed", "error", "")
                 return
             self._emit_safe("ok", translated.strip())
-        except Exception:
-            self._emit_safe("failed", "error")
+        except Exception as e:  # noqa: BLE001 - surface the concrete reason
+            self._emit_safe("failed", "error", str(e))
 
     def _on_result_ok(self, text):
         if self.panel and self.panel.isVisible():
             self.panel.show_state_result(text)
 
-    def _on_result_failed(self, code):
+    def _on_result_failed(self, code, detail):
         if self.panel and self.panel.isVisible():
-            self.panel.show_state_error(code)
+            self.panel.show_state_error(code, detail)
