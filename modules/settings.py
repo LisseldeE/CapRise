@@ -572,7 +572,8 @@ class _Sidebar(QListWidget):
 class SettingsDialog(QDialog):
     """Settings dialog split into a left navigation sidebar and a right pane."""
 
-    def __init__(self, capsule=None, hotkey_mgr=None, parent=None):
+    def __init__(self, capsule=None, hotkey_mgr=None, initial_page=None,
+                 parent=None):
         super().__init__(parent)
         self._capsule = capsule
         self._hotkey_mgr = hotkey_mgr
@@ -587,6 +588,18 @@ class SettingsDialog(QDialog):
         self.load_settings()
         self._connect_signals()
         self.center_on_screen()
+        if initial_page:
+            self._show_page(initial_page)
+
+    def _show_page(self, key):
+        """Jump straight to the sidebar page identified by `key`.
+
+        Used when the search results open the settings on a specific page.
+        setCurrentRow fires currentRowChanged, which drives the page fade."""
+        for i in range(self.sidebar.count()):
+            if self.sidebar.item(i).data(Qt.UserRole) == key:
+                self.sidebar.setCurrentRow(i)
+                break
 
     def _connect_signals(self):
         # Changes apply immediately as the user edits each control, rather than

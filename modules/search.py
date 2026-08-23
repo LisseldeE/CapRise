@@ -1,10 +1,12 @@
 """Global search window (spotlight-style).
 
-A floating search card with an input box, two scope toggles (全局文件 /
-安装软件) and a results card. Safe calculation results and matches against
-installed apps (read from the registry Uninstall keys in the background)
-are both inline; the "全局文件" scope is backed by the Everything (ET)
-software through its bundled es.exe command-line tool.
+A floating search card with an input box, three scope toggles (全局文件 /
+安装软件 / 系统设置) and a results card. Safe calculation results and
+matches against installed apps (read from the registry Uninstall keys in the
+background) are both inline; the "全局文件" scope is backed by the Everything
+(ET) software through its bundled es.exe command-line tool, and the
+"系统设置" scope matches Windows settings pages (ms-settings: URIs) plus
+CapRise's own settings pages.
 
 The window is a "family window" (registered with FamilyWindowRegistry) so
 clicking inside it never collapses the family. ESC / outside-click / Enter
@@ -37,11 +39,274 @@ from PySide6.QtWidgets import (
     QApplication, QAbstractButton, QFileIconProvider, QMessageBox
 )
 
-from modules.icons import ICON_SEARCH, ICON_APP, ICON_CALC, ICON_FILE
+from modules.icons import (
+    ICON_SEARCH, ICON_APP, ICON_CALC, ICON_FILE, ICON_SETTINGS
+)
 from modules.i18n import I18n
 from modules.family import FamilyWindowRegistry
 from modules.config import Config
 from modules.widgets import make_pixmap, system_color, screen_dpr
+
+
+# --------------------------------------------------------------------------
+# Windows system-settings index (ms-settings: URI scheme).
+#
+# Each entry is (uri, zh_name, en_name, [extra keywords]). The displayed name
+# follows the current UI language; matching also covers the other language
+# plus the keywords, so e.g. typing "蓝牙" or "bluetooth" both hit Bluetooth.
+# URIs come from the official ms-settings reference; pages that no longer
+# exist on common builds are omitted.
+# --------------------------------------------------------------------------
+
+_SYSTEM_SETTINGS = [
+    # --- System / 系统 ---
+    ("ms-settings:display", "显示", "Display", ["屏幕", "分辨率", "显示器", "monitor", "resolution"]),
+    ("ms-settings:display-advanced", "高级显示设置", "Advanced display", ["显示器", "刷新率", "display", "refresh"]),
+    ("ms-settings:nightlight", "夜灯", "Night light", ["夜间", "护眼", "night", "blue light"]),
+    ("ms-settings:screenrotation", "屏幕方向", "Screen rotation", ["旋转", "横屏", "竖屏", "rotation", "orientation"]),
+    ("ms-settings:sound", "声音", "Sound", ["音量", "扬声器", "audio", "volume"]),
+    ("ms-settings:sound-devices", "声音设备", "Sound devices", ["输出", "输入", "扬声器", "device", "output"]),
+    ("ms-settings:apps-volume", "应用音量和设备首选项", "App volume and device preferences", ["混音器", "app volume", "mixer"]),
+    ("ms-settings:notifications", "通知和操作", "Notifications & actions", ["通知", "提示", "notifications", "toast"]),
+    ("ms-settings:focus", "专注", "Focus", ["勿扰", "专注助手", "focus assist", "do not disturb"]),
+    ("ms-settings:quiethours", "专注助手", "Focus assist", ["勿扰", "专注", "focus assist", "dnd"]),
+    ("ms-settings:quietmomentsgame", "全屏游戏时专注助手", "Focus assist while playing a game", ["游戏", "全屏", "game", "fullscreen"]),
+    ("ms-settings:quietmomentsscheduled", "计划时间段专注助手", "Focus assist during hours", ["计划", "勿扰", "schedule", "hours"]),
+    ("ms-settings:quietmomentspresentation", "演示时专注助手", "Focus assist during presentation", ["演示", "投影", "presentation", "duplicating"]),
+    ("ms-settings:power", "电源和睡眠", "Power & sleep", ["电源", "睡眠", "休眠", "power", "sleep", "battery"]),
+    ("ms-settings:batterysaver", "节电模式", "Battery saver", ["电池", "省电", "battery", "power saver"]),
+    ("ms-settings:batterysaver-settings", "节电模式设置", "Battery saver settings", ["电池", "自动", "battery", "automatic"]),
+    ("ms-settings:batterysaver-usagedetails", "电池使用情况", "Battery use", ["电池", "耗电", "battery", "usage"]),
+    ("ms-settings:storage", "存储", "Storage", ["磁盘", "空间", "硬盘", "storage", "disk", "space"]),
+    ("ms-settings:storagesense", "存储感知", "Storage Sense", ["自动清理", "临时文件", "cleanup", "temp"]),
+    ("ms-settings:storagerecommendations", "存储建议", "Storage recommendations", ["清理建议", "cleanup", "recommendation"]),
+    ("ms-settings:storagepolicies", "存储策略", "Storage policies", ["策略", "policy"]),
+    ("ms-settings:disksandvolumes", "磁盘和卷", "Disks & volumes", ["分区", "格式化", "disk", "partition", "format"]),
+    ("ms-settings:savelocations", "默认保存位置", "Default save locations", ["保存", "下载", "文档", "save", "download", "document"]),
+    ("ms-settings:multitasking", "多任务处理", "Multitasking", ["任务", "窗口", "贴靠", "snap", "task"]),
+    ("ms-settings:clipboard", "剪贴板", "Clipboard", ["复制", "粘贴", "同步", "clipboard", "paste"]),
+    ("ms-settings:project", "投影到此电脑", "Projecting to this PC", ["投影", "无线", "屏幕", "project", "wireless"]),
+    ("ms-settings:crossdevice", "跨设备体验", "Shared experiences", ["跨设备", "分享", "shared", "cross device"]),
+    ("ms-settings:remote-desktop", "远程桌面", "Remote Desktop", ["远程", "rdp", "remote", "rdp"]),
+    ("ms-settings:about", "关于", "About", ["版本", "设备规格", "system info", "version", "specs"]),
+    ("ms-settings:activation", "激活", "Activation", ["激活", "密钥", "license", "product key"]),
+    ("ms-settings:recovery", "恢复", "Recovery", ["重置", "高级启动", "reset", "reinstall"]),
+    ("ms-settings:troubleshoot", "疑难解答", "Troubleshoot", ["诊断", "修复", "troubleshoot", "diagnose"]),
+    ("ms-settings:delivery-optimization", "传递优化", "Delivery Optimization", ["更新优化", "下载优化", "delivery", "optimization"]),
+    ("ms-settings:delivery-optimization-advanced", "传递优化高级设置", "Delivery Optimization advanced", ["带宽", "delivery", "bandwidth"]),
+    ("ms-settings:deviceencryption", "设备加密", "Device encryption", ["加密", "bitlocker", "encryption", "security"]),
+    ("ms-settings:findmydevice", "查找我的设备", "Find My Device", ["定位", "丢失", "find my device", "locate"]),
+    ("ms-settings:developers", "开发人员选项", "For developers", ["开发者", "开发者模式", "developer", "dev mode"]),
+    ("ms-settings:tabletmode", "平板模式", "Tablet mode", ["平板", "触摸", "tablet", "touch"]),
+    ("ms-settings:phone", "手机", "Phone", ["手机", "phone"]),
+    ("ms-settings:appsforwebsites", "网站应用", "Apps for websites", ["网站", "协议", "website", "protocol"]),
+    ("ms-settings:energyrecommendations", "能源建议", "Energy recommendations", ["节能", "电源建议", "energy", "power"]),
+    ("ms-settings:presence", "存在感测", "Presence sensing", ["人体感应", "presence", "sensing"]),
+    ("ms-settings:taskbar", "任务栏", "Taskbar", ["任务栏", "图标", "taskbar", "system tray"]),
+    # --- Bluetooth & devices / 蓝牙和其他设备 ---
+    ("ms-settings:bluetooth", "蓝牙", "Bluetooth", ["蓝牙", "耳机", "bluetooth", "pair"]),
+    ("ms-settings:devices", "蓝牙和其他设备", "Bluetooth & devices", ["蓝牙", "设备", "bluetooth", "devices"]),
+    ("ms-settings:printers", "打印机和扫描仪", "Printers & scanners", ["打印机", "扫描", "print", "scanner"]),
+    ("ms-settings:mousetouchpad", "鼠标和触摸板", "Mouse & touchpad", ["鼠标", "触摸板", "指针", "mouse", "touchpad"]),
+    ("ms-settings:devices-touchpad", "触摸板", "Touchpad", ["触摸板", "手势", "touchpad", "gesture"]),
+    ("ms-settings:typing", "键入", "Typing", ["键盘", "输入", "打字", "typing", "input"]),
+    ("ms-settings:pen", "触笔和 Windows Ink", "Pen & Windows Ink", ["触笔", "手写", "pen", "ink"]),
+    ("ms-settings:autoplay", "自动播放", "AutoPlay", ["自动播放", "u盘", "autoplay", "usb"]),
+    ("ms-settings:usb", "USB", "USB", ["usb", "u盘", "连接"]),
+    ("ms-settings:connecteddevices", "已连接设备", "Connected devices", ["设备", "连接", "devices", "connected"]),
+    ("ms-settings:camera", "相机设置", "Camera settings", ["摄像头", "相机", "camera"]),
+    ("ms-settings:mobile-devices", "手机", "Your phone", ["手机", "电话", "phone", "mobile"]),
+    ("ms-settings:mobile-devices-addphone", "添加手机", "Add a phone", ["手机", "配对", "phone", "pair"]),
+    ("ms-settings:devices-touch", "触控", "Touch", ["触摸", "触控", "touch"]),
+    ("ms-settings:wheel", "滚轮", "Wheel", ["滚轮", "dial", "wheel"]),
+    ("ms-settings:devicestyping-hwkbtextsuggestions", "硬件键盘文本建议", "Text suggestions", ["键盘", "输入建议", "keyboard", "suggestion"]),
+    # --- Network & internet / 网络和 Internet ---
+    ("ms-settings:network-status", "网络状态", "Network status", ["网络", "连接", "network", "status", "internet"]),
+    ("ms-settings:network-wifi", "Wi-Fi", "Wi-Fi", ["wifi", "无线", "无线网络"]),
+    ("ms-settings:network-wifisettings", "管理已知网络", "Manage known networks", ["wifi", "网络", "known", "saved"]),
+    ("ms-settings:network-ethernet", "以太网", "Ethernet", ["网线", "有线", "ethernet", "lan"]),
+    ("ms-settings:network-dialup", "拨号", "Dial-up", ["拨号", "dial", "pppoe"]),
+    ("ms-settings:network-vpn", "VPN", "VPN", ["vpn", "虚拟专用网络"]),
+    ("ms-settings:network-airplanemode", "飞行模式", "Airplane mode", ["飞行", "航空", "airplane", "flight"]),
+    ("ms-settings:network-mobilehotspot", "移动热点", "Mobile hotspot", ["热点", "共享网络", "hotspot", "tethering"]),
+    ("ms-settings:network-proxy", "代理", "Proxy", ["代理", "proxy", "服务器"]),
+    ("ms-settings:network-cellular", "蜂窝网络和 SIM 卡", "Cellular & SIM", ["sim", "蜂窝", "cellular", "mobile data"]),
+    ("ms-settings:network-datausage", "数据使用情况", "Data usage", ["流量", "数据", "data", "usage"]),
+    ("ms-settings:network-advancedsettings", "网络高级设置", "Advanced network settings", ["网络", "高级", "network", "advanced"]),
+    ("ms-settings:network-directaccess", "DirectAccess", "DirectAccess", ["directaccess"]),
+    ("ms-settings:proximity", "附近共享", "Nearby sharing", ["共享", "附近", "nearby", "share"]),
+    ("ms-settings:wifi-provisioning", "Wi-Fi 设置提供", "Wi-Fi provisioning", ["wifi", "provisioning"]),
+    # --- Personalization / 个性化 ---
+    ("ms-settings:personalization", "个性化", "Personalization", ["主题", "背景", "颜色", "personalization", "theme"]),
+    ("ms-settings:personalization-background", "背景", "Background", ["壁纸", "背景", "wallpaper", "background"]),
+    ("ms-settings:personalization-colors", "颜色", "Colors", ["颜色", "强调色", "colors", "accent"]),
+    ("ms-settings:personalization-start", "开始", "Start", ["开始菜单", "开始屏幕", "start menu", "start"]),
+    ("ms-settings:personalization-start-places", "选择显示在开始屏幕上的文件夹", "Choose which folders appear on Start", ["开始", "文件夹", "folders", "start"]),
+    ("ms-settings:lockscreen", "锁屏界面", "Lock screen", ["锁屏", "锁屏壁纸", "lock screen", "lockscreen"]),
+    ("ms-settings:themes", "主题", "Themes", ["主题", "桌面", "themes", "desktop"]),
+    ("ms-settings:personalization-touchkeyboard", "触摸键盘", "Touch keyboard", ["触摸键盘", "输入面板", "touch keyboard"]),
+    ("ms-settings:fonts", "字体", "Fonts", ["字体", "font", "字体设置"]),
+    # --- Apps / 应用 ---
+    ("ms-settings:appsfeatures", "应用和功能", "Apps & features", ["应用", "卸载", "apps", "uninstall"]),
+    ("ms-settings:appsfeatures-app", "应用高级选项", "Advanced app settings", ["应用", "重置", "高级", "app", "reset"]),
+    ("ms-settings:defaultapps", "默认应用", "Default apps", ["默认应用", "默认程序", "default apps", "file associations"]),
+    ("ms-settings:optionalfeatures", "可选功能", "Optional features", ["可选功能", "功能", "optional", "features"]),
+    ("ms-settings:startupapps", "启动应用", "Startup apps", ["开机启动", "自启动", "startup", "boot"]),
+    ("ms-settings:videoplayback", "视频播放", "Video playback", ["视频", "自动播放", "video", "playback"]),
+    ("ms-settings:maps", "离线地图", "Offline maps", ["地图", "离线", "maps", "offline"]),
+    ("ms-settings:apps", "应用", "Apps", ["应用", "已安装", "apps", "installed"]),
+    ("ms-settings:installedapps", "已安装的应用", "Installed apps", ["应用", "已安装", "apps", "installed"]),
+    # --- Accounts / 账户 ---
+    ("ms-settings:yourinfo", "你的信息", "Your info", ["账户", "头像", "account", "profile", "info"]),
+    ("ms-settings:emailandaccounts", "电子邮件和账户", "Email & accounts", ["邮箱", "账户", "email", "accounts"]),
+    ("ms-settings:signinoptions", "登录选项", "Sign-in options", ["登录", "密码", "pin", "sign in", "password"]),
+    ("ms-settings:signinoptions-dynamiclock", "动态锁", "Dynamic lock", ["动态锁", "离开锁定", "dynamic lock"]),
+    ("ms-settings:signinoptions-launchfaceenrollment", "Windows Hello 人脸识别", "Windows Hello face", ["人脸", "面部", "face", "hello"]),
+    ("ms-settings:signinoptions-launchfingerprintenrollment", "Windows Hello 指纹", "Windows Hello fingerprint", ["指纹", "fingerprint", "hello"]),
+    ("ms-settings:signinoptions-launchsecuritykeyenrollment", "安全密钥", "Security key", ["安全密钥", "密钥", "security key"]),
+    ("ms-settings:sync", "同步设置", "Sync your settings", ["同步", "同步设置", "sync", "roaming"]),
+    ("ms-settings:workplace", "访问工作或学校账户", "Access work or school", ["工作", "学校", "work", "school", "azure ad"]),
+    ("ms-settings:otherusers", "家庭和其他用户", "Family & other users", ["用户", "家庭成员", "family", "other users"]),
+    ("ms-settings:assignedaccess", "展台设置", "Kiosk setup", ["展台", "kiosk", "锁定"]),
+    ("ms-settings:backup", "Windows 备份", "Windows backup", ["备份", "还原", "backup", "restore"]),
+    # --- Time & language / 时间和语言 ---
+    ("ms-settings:dateandtime", "日期和时间", "Date & time", ["日期", "时间", "时区", "date", "time", "timezone"]),
+    ("ms-settings:region", "区域", "Region", ["区域", "国家", "地区", "region", "country"]),
+    ("ms-settings:regionformatting", "区域格式", "Region format", ["区域格式", "格式", "format", "locale"]),
+    ("ms-settings:language", "语言", "Language", ["语言", "显示语言", "language"]),
+    ("ms-settings:regionlanguage", "区域和语言", "Region & language", ["语言", "区域", "language", "region"]),
+    ("ms-settings:keyboard", "语言键盘", "Language & keyboard", ["键盘", "输入法", "keyboard", "ime"]),
+    ("ms-settings:speech", "语音", "Speech", ["语音", "识别", "speech", "recognition"]),
+    ("ms-settings:regionlanguage-languageoptions", "语言选项", "Language options", ["语言", "下载语言", "language options"]),
+    ("ms-settings:regionlanguage-setdisplaylanguage", "设置显示语言", "Set display language", ["显示语言", "display language"]),
+    ("ms-settings:regionlanguage-adddisplaylanguage", "添加显示语言", "Add display language", ["添加语言", "add language"]),
+    ("ms-settings:regionlanguage-chsime-pinyin", "拼音输入法设置", "Pinyin IME settings", ["拼音", "输入法", "pinyin", "ime"]),
+    # --- Gaming / 游戏 ---
+    ("ms-settings:gaming", "游戏", "Gaming", ["游戏", "game", "xbox"]),
+    ("ms-settings:gaming-gamebar", "游戏栏", "Game bar", ["游戏栏", "截图", "game bar", "gamebar"]),
+    ("ms-settings:gaming-gamedvr", "游戏录制", "Game captures", ["录制", "截图", "captures", "recording"]),
+    ("ms-settings:gaming-gamemode", "游戏模式", "Game Mode", ["游戏模式", "game mode", "性能"]),
+    ("ms-settings:gaming-xboxnetworking", "Xbox 网络", "Xbox networking", ["xbox", "网络", "network"]),
+    # --- Accessibility / 辅助功能 ---
+    ("ms-settings:easeofaccess", "辅助功能", "Accessibility", ["辅助功能", "无障碍", "accessibility", "ease of access"]),
+    ("ms-settings:easeofaccess-display", "辅助功能-显示", "Accessibility display", ["放大", "显示", "display", "accessibility"]),
+    ("ms-settings:easeofaccess-magnifier", "放大镜", "Magnifier", ["放大镜", "放大", "magnifier", "zoom"]),
+    ("ms-settings:easeofaccess-narrator", "讲述人", "Narrator", ["讲述人", "语音", "narrator", "screen reader"]),
+    ("ms-settings:easeofaccess-mousepointer", "鼠标指针和触控", "Mouse pointer & touch", ["鼠标指针", "光标", "mouse pointer"]),
+    ("ms-settings:easeofaccess-mouse", "鼠标", "Mouse", ["鼠标", "mouse"]),
+    ("ms-settings:easeofaccess-cursor", "文本光标", "Text cursor", ["光标", "文本", "text cursor"]),
+    ("ms-settings:easeofaccess-keyboard", "键盘", "Keyboard", ["键盘", "粘滞键", "keyboard", "sticky keys"]),
+    ("ms-settings:easeofaccess-closedcaptioning", "隐藏式字幕", "Closed captions", ["字幕", "caption", "subtitle"]),
+    ("ms-settings:easeofaccess-colorfilter", "颜色滤镜", "Color filters", ["颜色滤镜", "色盲", "color filter", "colorblind"]),
+    ("ms-settings:easeofaccess-highcontrast", "高对比度", "High contrast", ["高对比度", "主题", "high contrast", "contrast"]),
+    ("ms-settings:easeofaccess-audio", "音频", "Audio", ["音频", "单声道", "audio", "mono"]),
+    ("ms-settings:easeofaccess-speechrecognition", "语音识别", "Speech recognition", ["语音", "识别", "speech", "dictation"]),
+    ("ms-settings:easeofaccess-eyecontrol", "眼动控制", "Eye control", ["眼动", "eye control"]),
+    ("ms-settings:easeofaccess-visualeffects", "视觉效果", "Visual effects", ["动画", "滚动", "visual effects", "animation"]),
+    ("ms-settings:accessibility", "辅助功能", "Accessibility", ["无障碍", "accessibility"]),
+    # --- Privacy & security / 隐私和安全性 ---
+    ("ms-settings:privacy", "隐私", "Privacy & security", ["隐私", "权限", "privacy", "permissions"]),
+    ("ms-settings:privacy-general", "常规隐私设置", "General privacy settings", ["隐私", "广告", "privacy", "advertising"]),
+    ("ms-settings:privacy-location", "位置", "Location", ["位置", "定位", "location", "gps"]),
+    ("ms-settings:privacy-webcam", "相机权限", "Camera privacy", ["摄像头", "相机", "camera", "webcam"]),
+    ("ms-settings:privacy-microphone", "麦克风权限", "Microphone privacy", ["麦克风", "话筒", "microphone", "mic"]),
+    ("ms-settings:privacy-voiceactivation", "语音激活", "Voice activation", ["语音", "助手", "voice", "activation"]),
+    ("ms-settings:privacy-speechtyping", "墨迹和键入个性化", "Inking & typing personalization", ["墨迹", "键入", "inking", "typing"]),
+    ("ms-settings:privacy-accountinfo", "账户信息", "Account info", ["账户", "账户信息", "account info"]),
+    ("ms-settings:privacy-contacts", "联系人", "Contacts", ["联系人", "通讯录", "contacts"]),
+    ("ms-settings:privacy-calendar", "日历", "Calendar", ["日历", "calendar"]),
+    ("ms-settings:privacy-callhistory", "通话记录", "Call history", ["通话", "call history"]),
+    ("ms-settings:privacy-email", "电子邮件", "Email", ["电子邮件", "邮箱", "email"]),
+    ("ms-settings:privacy-messaging", "消息", "Messaging", ["消息", "短信", "messaging", "sms"]),
+    ("ms-settings:privacy-radios", "无线收发器", "Radios", ["无线", "wifi", "蓝牙", "radios"]),
+    ("ms-settings:privacy-customdevices", "其他设备", "Other devices", ["设备", "other devices"]),
+    ("ms-settings:privacy-appdiagnostics", "应用诊断信息", "App diagnostics", ["诊断", "diagnostics"]),
+    ("ms-settings:privacy-activityhistory", "活动历史记录", "Activity history", ["活动", "时间线", "activity history", "timeline"]),
+    ("ms-settings:privacy-broadfilesystemaccess", "文件系统", "File system", ["文件", "文件系统", "file system"]),
+    ("ms-settings:privacy-documents", "文档", "Documents", ["文档", "documents"]),
+    ("ms-settings:privacy-downloadsfolder", "下载文件夹", "Downloads folder", ["下载", "downloads"]),
+    ("ms-settings:privacy-pictures", "图片", "Pictures", ["图片", "照片", "pictures", "photos"]),
+    ("ms-settings:privacy-videos", "视频", "Videos", ["视频", "videos"]),
+    ("ms-settings:privacy-musiclibrary", "音乐库", "Music library", ["音乐", "music"]),
+    ("ms-settings:privacy-automaticfiledownloads", "自动文件下载", "Automatic file downloads", ["下载", "自动", "downloads"]),
+    ("ms-settings:privacy-feedback", "诊断和反馈", "Diagnostics & feedback", ["诊断", "反馈", "diagnostics", "feedback"]),
+    ("ms-settings:privacy-notifications", "通知权限", "Notifications privacy", ["通知", "notifications"]),
+    ("ms-settings:privacy-backgroundapps", "后台应用权限", "Background apps", ["后台", "后台应用", "background apps"]),
+    ("ms-settings:privacy-motion", "运动", "Motion", ["运动", "motion"]),
+    ("ms-settings:privacy-eyetracker", "眼动跟踪器", "Eye tracker", ["眼动", "eye tracker"]),
+    ("ms-settings:privacy-phonecalls", "电话通话", "Phone calls", ["电话", "通话", "phone calls"]),
+    ("ms-settings:privacy-graphicscaptureprogrammatic", "图形捕获", "Graphics capture", ["图形", "截图", "graphics", "capture"]),
+    ("ms-settings:privacy-backgroundspatialperception", "后台空间感知", "Background spatial perception", ["空间", "感知", "spatial"]),
+    ("ms-settings:windowsdefender", "Windows 安全中心", "Windows Security", ["安全", "杀毒", "defender", "security", "antivirus"]),
+    # --- Windows Update / Windows 更新 ---
+    ("ms-settings:windowsupdate", "Windows 更新", "Windows Update", ["更新", "升级", "update", "upgrade", "补丁"]),
+    ("ms-settings:windowsupdate-history", "更新历史记录", "Update history", ["历史", "卸载更新", "update history"]),
+    ("ms-settings:windowsupdate-optionalupdates", "可选更新", "Optional updates", ["可选", "驱动", "optional", "drivers"]),
+    ("ms-settings:windowsupdate-advancedoptions", "高级选项", "Advanced options", ["高级", "advanced", "更新"]),
+    ("ms-settings:windowsupdate-activehours", "使用时段", "Active hours", ["使用时段", "重启", "active hours"]),
+    ("ms-settings:windowsupdate-restartoptions", "重启选项", "Restart options", ["重启", "restart", "更新"]),
+    ("ms-settings:windowsupdate-savetips", "提醒设置", "Save tips", ["提醒", "提示", "tips"]),
+    ("ms-settings:windowsupdate-driverupdate", "驱动更新", "Driver updates", ["驱动", "driver", "更新"]),
+    # --- Search / 搜索 ---
+    ("ms-settings:search", "搜索", "Search", ["搜索", "windows 搜索", "search"]),
+    ("ms-settings:search-permissions", "搜索权限", "Search permissions", ["搜索", "权限", "search", "permissions"]),
+    # --- Control center / 其他 ---
+    ("ms-settings:controlcenter", "控制中心", "Control center", ["控制中心", "快速设置", "control center"]),
+    ("ms-settings:start", "开始菜单", "Start", ["开始菜单", "开始", "start menu"]),
+    ("ms-settings:extras", "加载项", "Extras", ["附加", "extras"]),
+    # --- Classic control panel (cpl) + admin tools (msc/exe) ---
+    # These open via the legacy control-panel applets / MMC consoles / system
+    # tools instead of ms-settings: URIs, so the activation handler launches
+    # them as commands (subprocess) rather than os.startfile(uri).
+    ("control", "控制面板", "Control Panel", ["控制面板", "control panel", "控制", "control"]),
+    ("appwiz.cpl", "程序和功能", "Programs and Features", ["卸载程序", "卸载", "更改程序", "programs", "uninstall", "appwiz"]),
+    ("ncpa.cpl", "网络连接", "Network Connections", ["网络连接", "适配器", "network connections", "adapter", "ncpa"]),
+    ("sysdm.cpl", "系统属性", "System Properties", ["系统属性", "计算机名", "环境变量", "高级系统设置", "system properties", "computer name", "env"]),
+    ("inetcpl.cpl", "Internet 选项", "Internet Options", ["internet 选项", "代理设置", "internet options", "inetcpl"]),
+    ("firewall.cpl", "Windows 防火墙", "Windows Firewall", ["防火墙", "入站", "出站", "firewall", "inbound", "outbound"]),
+    ("devmgmt.msc", "设备管理器", "Device Manager", ["设备管理器", "设备", "驱动", "device manager", "devmgmt"]),
+    ("diskmgmt.msc", "磁盘管理", "Disk Management", ["磁盘管理", "分区", "卷", "disk management", "diskmgmt", "partition"]),
+    ("services.msc", "服务", "Services", ["服务", "windows 服务", "services", "启动类型"]),
+    ("eventvwr.msc", "事件查看器", "Event Viewer", ["事件查看器", "事件日志", "日志", "event viewer", "eventvwr"]),
+    ("compmgmt.msc", "计算机管理", "Computer Management", ["计算机管理", "管理工具", "computer management", "compmgmt"]),
+    ("secpol.msc", "本地安全策略", "Local Security Policy", ["本地安全策略", "安全策略", "密码策略", "security policy", "secpol"]),
+    ("lusrmgr.msc", "本地用户和组", "Local Users and Groups", ["本地用户", "用户组", "local users", "lusrmgr"]),
+    ("perfmon.msc", "性能监视器", "Performance Monitor", ["性能监视器", "性能", "perfmon", "performance"]),
+    ("taskschd.msc", "任务计划程序", "Task Scheduler", ["任务计划", "计划任务", "task scheduler", "taskschd"]),
+    ("certmgr.msc", "证书管理器", "Certificate Manager", ["证书", "certificate", "certmgr"]),
+    ("gpedit.msc", "组策略编辑器", "Group Policy Editor", ["组策略", "本地组策略", "group policy", "gpedit"]),
+    ("taskmgr", "任务管理器", "Task Manager", ["任务管理器", "进程", "性能", "task manager", "taskmgr"]),
+    ("regedit", "注册表编辑器", "Registry Editor", ["注册表", "regedit", "registry"]),
+    ("msinfo32", "系统信息", "System Information", ["系统信息", "msinfo32", "system information"]),
+    ("msconfig", "系统配置", "System Configuration", ["系统配置", "启动项", "msconfig", "system configuration"]),
+    ("cleanmgr", "磁盘清理", "Disk Cleanup", ["磁盘清理", "清理磁盘", "disk cleanup", "cleanmgr"]),
+    ("resmon", "资源监视器", "Resource Monitor", ["资源监视器", "resmon", "resource monitor"]),
+    ("cmd", "命令提示符", "Command Prompt", ["命令提示符", "命令行", "cmd", "dos", "terminal"]),
+    ("powershell", "Windows PowerShell", "Windows PowerShell", ["powershell", "ps", "脚本"]),
+]
+
+# CapRise's OWN settings pages, opened by showing the Settings dialog on the
+# matching sidebar page (key matches _Sidebar's Qt.UserRole value).
+_APP_SETTINGS = [
+    ("general", "常规", "General", ["通用", "工具", "隐藏", "常规", "general", "tools"]),
+    ("hotkey", "快捷键", "Hotkeys", ["快捷键", "热键", "hotkey", "shortcut", "键位"]),
+    ("translate", "翻译", "Translate", ["翻译", "翻译语言", "translate", "language", "译文"]),
+    ("system", "系统", "System", ["系统", "开机", "自启动", "更新", "system", "autostart", "update"]),
+    ("about", "关于", "About", ["关于", "版本", "更新", "about", "version", "check update"]),
+]
+
+
+def _setting_name(zh, en):
+    """Display name for a settings entry following the current UI language."""
+    return zh if I18n.get_language() == "zh_CN" else en
+
+
+def _setting_matches(text, zh, en, keywords):
+    """Substring match of `text` (lowercased) against both names + keywords."""
+    t = text.lower()
+    if t in zh.lower() or t in en.lower():
+        return True
+    return any(t in k.lower() for k in keywords)
 
 
 # --------------------------------------------------------------------------
@@ -688,6 +953,9 @@ class SearchWindow(QWidget):
     closed = Signal()
     # 2nd arg: list of matching file paths (success) or None (search failed).
     file_results_ready = Signal(int, object)
+    # User activated a CapRise own-settings row: open the Settings dialog on
+    # the given sidebar page key (e.g. "hotkey"). Carried by CapRiseApp.
+    open_app_settings = Signal(str)
 
     WIDTH = 520
     MAX_RESULTS_H = 300
@@ -741,6 +1009,10 @@ class SearchWindow(QWidget):
         self._file_query_gen = 0
         self._file_loading_row = None
         self._file_section_lbl = None
+        # Windows system-settings / CapRise own-settings section headers
+        # (both live under the same 系统设置 switch).
+        self._settings_section_lbl = None
+        self._app_settings_section_lbl = None
 
         self._build_ui()
         self._init_anim()
@@ -822,8 +1094,15 @@ class SearchWindow(QWidget):
         self.switch_apps = ToggleSwitch(I18n.tr("search_installed_apps"))
         # Restore the persisted 安装软件 switch (default on).
         self.switch_apps.setChecked(Config().get("search_apps_enabled", True))
+        # 系统设置 switch — gates BOTH Windows system-settings (ms-settings
+        # URIs) and CapRise's own settings pages. Default off (no external
+        # dependency, but kept conservative so the results stay focused).
+        self.switch_settings = ToggleSwitch(I18n.tr("search_app_settings"))
+        self.switch_settings.setChecked(
+            Config().get("search_settings_enabled", False))
         toggles.addWidget(self.switch_files)
         toggles.addWidget(self.switch_apps)
+        toggles.addWidget(self.switch_settings)
         toggles.addStretch()
         root.addLayout(toggles)
 
@@ -868,6 +1147,7 @@ class SearchWindow(QWidget):
         self.search_input.installEventFilter(self)
         self.switch_files.toggled.connect(self._on_files_toggle)
         self.switch_apps.toggled.connect(self._on_scope_changed)
+        self.switch_settings.toggled.connect(self._on_settings_toggle)
         # Results from the ET worker thread arrive here (queued connection).
         self.file_results_ready.connect(self._on_file_results_ready)
 
@@ -1100,6 +1380,11 @@ class SearchWindow(QWidget):
         Config().set("search_apps_enabled", self.switch_apps.isChecked())
         self._rebuild_results()
 
+    def _on_settings_toggle(self, _=None):
+        # Persist the 系统设置 switch so it survives restarts (default off).
+        Config().set("search_settings_enabled", self.switch_settings.isChecked())
+        self._rebuild_results()
+
     def _on_index_poll(self):
         if get_indexed_apps() is not None:
             self._index_poll.stop()
@@ -1286,6 +1571,8 @@ class SearchWindow(QWidget):
         self._nav = []
         self._file_loading_row = None
         self._file_section_lbl = None
+        self._settings_section_lbl = None
+        self._app_settings_section_lbl = None
 
         text = self.search_input.text().strip()
         if not text:
@@ -1316,7 +1603,42 @@ class SearchWindow(QWidget):
                     for app in matches:
                         self._pending_rows.append(("app", app))
 
-        # 3) Global files — Everything(ET) backend, queried on a background
+        # 3) System settings — Windows settings pages (ms-settings: URIs) go
+        #    under the 系统设置 header; classic control-panel applets / MMC
+        #    consoles / system tools (control, devmgmt.msc, ...) are treated
+        #    as programs and land under the 应用 header instead. CapRise's
+        #    own settings pages get their own 应用设置 header. Placed BEFORE
+        #    the files section so the up/down arrow traversal reaches the
+        #    settings groups above the (usually larger) file list.
+        if self.switch_settings.isChecked():
+            sys_pages = [s for s in _SYSTEM_SETTINGS
+                         if s[0].startswith("ms-settings:")
+                         and _setting_matches(text, s[1], s[2], s[3])]
+            if sys_pages:
+                self._settings_section_lbl = self._add_section(
+                    I18n.tr("search_category_system_settings"))
+                for s in sys_pages:
+                    self._pending_rows.append(("system_setting", s))
+            sys_tools = [s for s in _SYSTEM_SETTINGS
+                         if not s[0].startswith("ms-settings:")
+                         and _setting_matches(text, s[1], s[2], s[3])]
+            if sys_tools:
+                # Reuse the 应用 section (shared with installed apps); create
+                # it here too when the 安装软件 toggle is off.
+                if self._apps_section_lbl is None:
+                    self._apps_section_lbl = self._add_section(
+                        I18n.tr("search_category_apps"))
+                for s in sys_tools:
+                    self._pending_rows.append(("system_setting", s))
+            app_matches = [a for a in _APP_SETTINGS
+                           if _setting_matches(text, a[1], a[2], a[3])]
+            if app_matches:
+                self._app_settings_section_lbl = self._add_section(
+                    I18n.tr("search_category_app_settings"))
+                for a in app_matches:
+                    self._pending_rows.append(("app_setting", a))
+
+        # 4) Global files — Everything(ET) backend, queried on a background
         #    thread so typing stays responsive. The loading row shows until
         #    es.exe answers; the section is populated in
         #    _on_file_results_ready (stale queries are dropped by gen).
@@ -1349,6 +1671,10 @@ class SearchWindow(QWidget):
             kind, data = self._pending_rows.popleft()
             if kind == "app":
                 self._add_app_row(data)
+            elif kind == "system_setting":
+                self._add_system_setting_row(data)
+            elif kind == "app_setting":
+                self._add_app_setting_row(data)
             else:
                 self._add_file_row(data)
             made += 1
@@ -1382,6 +1708,33 @@ class SearchWindow(QWidget):
         self._append_row(row, {"kind": "app", "path": path},
                          tooltip=I18n.tr("search_app_open_tip"),
                          section=self._apps_section_lbl)
+
+    def _add_system_setting_row(self, entry):
+        """Windows settings page (ms-settings: URI) or system tool result row.
+
+        ms-settings: pages sit under the 系统设置 header; classic control
+        panel / MMC / system-tool commands sit under the 应用 header."""
+        uri, zh, en, _kw = entry
+        section = (self._settings_section_lbl
+                   if uri.startswith("ms-settings:")
+                   else self._apps_section_lbl)
+        row = ResultRow(
+            ICON_SETTINGS, _setting_name(zh, en),
+            I18n.tr("search_settings_hint"))
+        self._append_row(row, {"kind": "system_setting", "uri": uri},
+                         tooltip=I18n.tr("search_settings_open_tip"),
+                         section=section)
+
+    def _add_app_setting_row(self, entry):
+        """CapRise's own settings page result row (opens the Settings dialog
+        on the matching sidebar page)."""
+        key, zh, en, _kw = entry
+        row = ResultRow(
+            ICON_SETTINGS, _setting_name(zh, en),
+            I18n.tr("search_app_settings_hint"))
+        self._append_row(row, {"kind": "app_setting", "key": key},
+                         tooltip=I18n.tr("search_settings_open_tip"),
+                         section=self._app_settings_section_lbl)
 
     def _add_loading_row(self):
         lbl = QLabel(I18n.tr("search_indexing"))
@@ -1547,3 +1900,31 @@ class SearchWindow(QWidget):
                 except OSError:
                     pass
             self.close_search()
+        elif kind == "system_setting":
+            # Windows settings page (ms-settings: URI) or a classic control
+            # panel / MMC console / system tool (plain command). The former
+            # is a URI handled by os.startfile; the latter is a shell command
+            # (control, devmgmt.msc, taskmgr, ...) launched via subprocess so
+            # it resolves through PATH without a flashing console window.
+            target = payload.get("uri", "")
+            if target:
+                try:
+                    if target.startswith("ms-settings:"):
+                        os.startfile(target)
+                    else:
+                        subprocess.Popen(
+                            target, shell=True,
+                            creationflags=_CREATE_NO_WINDOW)
+                except OSError:
+                    pass
+            self.close_search()
+        elif kind == "app_setting":
+            # CapRise's own settings page: carry the target page key to the
+            # app, which opens the Settings dialog on that page.
+            key = payload.get("key", "")
+            self.close_search()
+            if key:
+                # Defer so the card's fade-out starts before the modal
+                # Settings dialog grabs the event loop.
+                QTimer.singleShot(
+                    0, lambda k=key: self.open_app_settings.emit(k))

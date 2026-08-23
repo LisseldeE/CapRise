@@ -266,6 +266,7 @@ class CapRiseApp:
         # Reference-safe: only clear the ref if it still points at THIS
         # window — a stale window's late `closed` can't null a newer card.
         window.closed.connect(lambda w=window: self._on_search_closed(w))
+        window.open_app_settings.connect(self._on_open_app_settings)
         window.show_search()
 
     def _close_search(self):
@@ -291,6 +292,13 @@ class CapRiseApp:
 
     def _on_settings(self):
         dialog = SettingsDialog(capsule=self.capsule, hotkey_mgr=self.hotkey_mgr)
+        dialog.exec()
+
+    def _on_open_app_settings(self, page):
+        """A search result asked to open CapRise's settings on a specific
+        page (e.g. "hotkey") — open the dialog on that sidebar page."""
+        dialog = SettingsDialog(capsule=self.capsule, hotkey_mgr=self.hotkey_mgr,
+                                initial_page=page)
         dialog.exec()
 
     def _on_overlay_closed(self, overlay):
