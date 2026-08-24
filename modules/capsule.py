@@ -1,6 +1,6 @@
 from ctypes import wintypes
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QGraphicsDropShadowEffect, QApplication
+    QWidget, QGraphicsDropShadowEffect, QApplication
 )
 from PySide6.QtCore import (
     Qt, QPoint, QRect, QPropertyAnimation, QEasingCurve, QEvent,
@@ -65,6 +65,15 @@ class CapsuleBar(QWidget):
     # strip's divider once the strip expanded).
     BASE_HEIGHT = 56
 
+    # Manual-layout metrics (mirror the approved Plan B preview): the capsule
+    # has no QHBoxLayout — every child is positioned by _layout_manual() so the
+    # timer strip can span its full final width while the capsule width still
+    # grows dynamically. These match the old layout's margins/spacing exactly.
+    MARGIN = 14
+    TOP = 6
+    BTN = 44
+    SPACING = 10
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowFlags(
@@ -100,9 +109,10 @@ class CapsuleBar(QWidget):
         self._mouse_hook.install()
 
     def setup_ui(self):
-        layout = QHBoxLayout(self)
-        layout.setSpacing(10)
-        layout.setContentsMargins(14, 6, 14, 6)
+        # No QHBoxLayout: every child is positioned manually by _layout_manual()
+        # so the timer strip can span its full final width (divider locked at
+        # the final position) while the capsule width still grows dynamically —
+        # the approved Plan B preview.
 
         # Timer countdown strip: hidden until a timer starts, then the capsule
         # extends to its left (same glass plate, hairline divider) and the
@@ -117,7 +127,6 @@ class CapsuleBar(QWidget):
         self.timer.phase_changed.connect(self._refresh_timer_display)
         self.timer.state_changed.connect(self._on_timer_state)
         self.timer.finished.connect(self._on_timer_finished)
-        layout.addWidget(self.timer_display)
 
         # The five tool buttons are built in the user-defined order (stored
         # in config["tool_order"]); Settings and Close stay pinned at the end.
@@ -136,25 +145,28 @@ class CapsuleBar(QWidget):
         # All capsule icons must keep their original colour on hover (task 1):
         # only the translucent plate animates, never a colour tint on the SVG.
         self._tool_buttons = {}
+        self._tool_order = []
         for key in order:
             if key not in tool_specs:
                 continue
             svg, tooltip_key = tool_specs[key]
             btn = GlassIconButton(svg, I18n.tr(tooltip_key), colorize_icon=False)
+            btn.setParent(self)
             self._tool_buttons[key] = btn
-            layout.addWidget(btn)
+            self._tool_order.append(key)
         # Fallback: if a stale saved order misses a tool, append it so the
         # capsule never loses a button.
         for key, (svg, tooltip_key) in tool_specs.items():
             if key in self._tool_buttons:
                 continue
             btn = GlassIconButton(svg, I18n.tr(tooltip_key), colorize_icon=False)
+            btn.setParent(self)
             self._tool_buttons[key] = btn
-            layout.addWidget(btn)
+            self._tool_order.append(key)
 
         self.btn_settings = GlassIconButton(
             ICON_SETTINGS, I18n.tr("settings"), colorize_icon=False)
-        layout.addWidget(self.btn_settings)
+        self.btn_settings.setParent(self)
 
         self.btn_close = GlassIconButton(
             ICON_CLOSE, I18n.tr("close"),
@@ -162,7 +174,7 @@ class CapsuleBar(QWidget):
             hover_bg_color=QColor(224, 49, 49),
             colorize_icon=False
         )
-        layout.addWidget(self.btn_close)
+        self.btn_close.setParent(self)
 
         # Stable references used by CapRiseApp.connect_signals().
         self.btn_screenshot = self._tool_buttons["screenshot"]
@@ -172,12 +184,17 @@ class CapsuleBar(QWidget):
         self.btn_search = self._tool_buttons["search"]
         self.btn_timer = self._tool_buttons["timer"]
 
+        # Full ordered toolbar: tool buttons in user order + settings + close.
+        self._toolbar = [self._tool_buttons[k] for k in self._tool_order] \
+            + [self.btn_settings, self.btn_close]
+        self._toolbar_w = len(self._toolbar) * self.BTN \
+            + (len(self._toolbar) - 1) * self.SPACING
+
         # Apply the user's per-tool show/hide choice (config["hidden_tools"]).
         self.set_tools_hidden(Config().get("hidden_tools", []))
-        # Establish the base width from the layout's natural size (timer
-        # strip hidden at this point), so the capsule exactly fits its tool
-        # cluster with full inter-button gaps.
-        self.setFixedWidth(self.layout().sizeHint().width())
+        # Establish the base (collapsed) width manually — the capsule exactly
+        # fits its tool cluster with full inter-button gaps.
+        self._layout_manual(0)
 
     # ----- timer strip -----
 
@@ -265,26 +282,20 @@ class CapsuleBar(QWidget):
         """Reorder the tool buttons to match `order` (a list of tool keys).
 
         The existing button objects are reused and only their position in the
-        layout changes, so the signal connections made in CapRiseApp stay
-        valid. Settings and Close always remain pinned at the end.
+        manual toolbar list changes, so the signal connections made in
+        CapRiseApp stay valid. Settings and Close always remain pinned at the
+        end.
 
         A stale saved order (e.g. from before a new tool was added) is
         tolerated: any tool missing from `order` is appended so the capsule
         never loses a button."""
-        layout = self.layout()
-        for btn in self._tool_buttons.values():
-            layout.removeWidget(btn)
-        anchor = self.btn_settings  # insert before Settings
-        inserted = set()
-        for key in order:
-            btn = self._tool_buttons.get(key)
-            if btn is not None:
-                layout.insertWidget(layout.indexOf(anchor), btn)
-                inserted.add(key)
-        # Append tools missing from the saved order (new tools, stale config).
-        for key, btn in self._tool_buttons.items():
-            if key not in inserted:
-                layout.insertWidget(layout.indexOf(anchor), btn)
+        self._tool_order = [k for k in order if k in self._tool_buttons]
+        for k in self._tool_buttons:
+            if k not in self._tool_order:
+                self._tool_order.append(k)
+        self._toolbar = [self._tool_buttons[k] for k in self._tool_order] \
+            + [self.btn_settings, self.btn_close]
+        self._layout_manual(self._current_strip_w())
 
     def setup_shadow(self):
         shadow = QGraphicsDropShadowEffect()
@@ -326,40 +337,76 @@ class CapsuleBar(QWidget):
     timerExpand = Property(float, _get_timer_extent, _set_timer_extent)
 
     def _apply_timer_extent(self, p):
-        """Sync the strip width, mask and capsule width to the expand extent.
+        """Sync the strip mask and capsule geometry to the expand extent.
 
-        The strip is clipped to a growing width (curtain reveal), so its label
-        and buttons never spill past the plate while it is only partially
-        expanded. The capsule width is always the layout's natural sizeHint —
-        the divider (the strip's right edge) is thereby locked to the exact
-        boundary between the strip content and the tool cluster, so no tool
-        button can ever be pushed under the divider. At extent 0 the strip
-        leaves the layout, leaving the plain base capsule with no residue."""
+        Plan B (approved preview): the strip's widget spans its full final
+        width, so its hairline divider and the reset/stop column stay locked
+        at the final divider position while the capsule grows. A right-aligned
+        mask [strip_w-reveal, strip_w] reveals the content anchored to the
+        current divider and extends it leftward (the strip's left side stays
+        blank briefly while it is still expanding); the part of the strip past
+        the capsule edge is clipped by the parent. The capsule width grows
+        with strip_w and stays centered. At extent 0 the strip leaves the
+        scene, leaving the plain base capsule with no residue."""
         p = max(0.0, min(1.0, p))
         if p <= 0.001:
             if not self.timer_display.isHidden():
                 self.timer_display.setVisible(False)
             self.timer_display.clearMask()
-            w = self.layout().sizeHint().width()
-            if w != self.width():
-                self.setFixedWidth(w)
+            self._layout_manual(0)
             if self.isVisible():
                 self._recenter()
             return
         if self.timer_display.isHidden():
             self.timer_display.setVisible(True)
         strip_w = int(round(p * self._full_strip_w))
-        self.timer_display.setFixedWidth(strip_w)
         if p >= 0.999:
             self.timer_display.clearMask()
         else:
-            self.timer_display.setMask(QRegion(
-                QRect(0, 0, max(1, strip_w), self.timer_display.height())))
-        w = self.layout().sizeHint().width()
-        if w != self.width():
-            self.setFixedWidth(w)
+            # Right-aligned reveal anchored to the current divider (strip_w):
+            # show the rightmost `reveal` pixels so content slides out from
+            # the divider toward the left (matches the approved preview).
+            reveal = int(round((p ** 1.5) * self._full_strip_w))
+            reveal = min(reveal, strip_w)
+            if reveal >= self._full_strip_w - 1:
+                self.timer_display.clearMask()
+            else:
+                x0 = max(0, strip_w - reveal)
+                self.timer_display.setMask(QRegion(
+                    QRect(x0, 0, max(1, reveal), self.timer_display.height())))
+        self._layout_manual(strip_w)
         if self.isVisible():
             self._recenter()
+
+    def _current_strip_w(self):
+        """Current strip width in px (0 when the strip is not shown)."""
+        if self.timer_display.isVisible():
+            return int(round(self._timer_extent * self._full_strip_w))
+        return 0
+
+    def _layout_manual(self, strip_w):
+        """Position the timer strip and the tool cluster by hand.
+
+        Mirrors the approved Plan B preview: the strip occupies its full final
+        width (right edge = final divider, clipped by the capsule edge), while
+        the capsule width grows with strip_w and the tool cluster shifts right
+        past the strip. Collapsed (strip_w == 0) reproduces the old layout's
+        base geometry exactly (tools start at the left margin)."""
+        if strip_w > 0:
+            cw = self.MARGIN + strip_w + self.SPACING + self._toolbar_w \
+                + self.MARGIN
+            x = self.MARGIN + strip_w + self.SPACING
+        else:
+            cw = self.MARGIN + self._toolbar_w + self.MARGIN
+            x = self.MARGIN
+        self.setFixedWidth(cw)
+        if self.timer_display.isVisible():
+            self.timer_display.setGeometry(
+                self.MARGIN, self.TOP, self._full_strip_w,
+                self.timer_display.HEIGHT)
+        for b in self._toolbar:
+            b.setGeometry(x, self.TOP, self.BTN, self.BTN)
+            x += self.BTN + self.SPACING
 
     def _animate_timer_extent(self, target):
         self._timer_width_anim.stop()
