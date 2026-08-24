@@ -3,10 +3,12 @@ from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QGraphicsDropShadowEffect, QApplication
 )
 from PySide6.QtCore import (
-    Qt, QPoint, QPropertyAnimation, QEasingCurve, QEvent,
-    QAbstractNativeEventFilter, Signal, QTimer
+    Qt, QPoint, QRect, QPropertyAnimation, QEasingCurve, QEvent,
+    QAbstractNativeEventFilter, Signal, QTimer, Property
 )
-from PySide6.QtGui import QPainter, QColor, QGuiApplication, QKeyEvent, QCursor
+from PySide6.QtGui import (
+    QPainter, QColor, QGuiApplication, QKeyEvent, QCursor, QRegion
+)
 from modules.icons import (
     ICON_SCREENSHOT, ICON_ANNOTATION, ICON_TRANSLATE, ICON_SETTINGS,
     ICON_CLOSE, ICON_CLIPBOARD, ICON_SEARCH, ICON_TIMER
@@ -55,10 +57,12 @@ class CapsuleBar(QWidget):
 
     hide_family_requested = Signal()
 
-    # Base capsule size without the timer strip (matches the pre-timer fixed
-    # 396x56 layout); the strip extends the width by its own width + one
-    # inter-item gap when a timer is active.
-    BASE_WIDTH = 396
+    # Capsule height. The width is NOT hardcoded: it is measured from the
+    # layout's natural sizeHint so the capsule always fits its current tool
+    # cluster exactly (the cluster is 8 buttons now that the timer tool was
+    # added — a hardcoded 396 from the 7-button era left the layout 54px
+    # short, squeezing the gaps and pushing the tool buttons under the timer
+    # strip's divider once the strip expanded).
     BASE_HEIGHT = 56
 
     def __init__(self, parent=None):
@@ -107,7 +111,7 @@ class CapsuleBar(QWidget):
         self.timer_display = TimerDisplay(self)
         self.timer_display.setVisible(False)
         self.timer_display.pause_toggled.connect(self.timer.toggle_pause)
-        self.timer_display.reset_requested.connect(self.timer.reset)
+        self.timer_display.reset_requested.connect(self.timer.reset_phase)
         self.timer_display.close_requested.connect(self.timer.reset)
         self.timer.tick.connect(self._refresh_timer_display)
         self.timer.phase_changed.connect(self._refresh_timer_display)
@@ -170,29 +174,32 @@ class CapsuleBar(QWidget):
 
         # Apply the user's per-tool show/hide choice (config["hidden_tools"]).
         self.set_tools_hidden(Config().get("hidden_tools", []))
-        # Establish the base width (timer strip hidden at this point).
-        self.setFixedWidth(self.BASE_WIDTH)
+        # Establish the base width from the layout's natural size (timer
+        # strip hidden at this point), so the capsule exactly fits its tool
+        # cluster with full inter-button gaps.
+        self.setFixedWidth(self.layout().sizeHint().width())
 
     # ----- timer strip -----
 
-    def _sync_timer_width(self):
-        """Resize the capsule to fit the timer strip (or back to base width)
-        and keep it horizontally centered. Called only when the strip shows or
-        hides — the monospace HH:MM:SS keeps the width constant while ticking,
-        so there is no per-second churn or re-centering."""
-        # isHidden() (not isVisible()) so the decision is independent of
-        # whether the parent capsule itself is currently shown.
-        if not self.timer_display.isHidden():
-            # Reserve the layout's full ideal width. The tool buttons are all
-            # fixed-size, so this is the only width that guarantees the timer
-            # strip receives its complete sizeHint — a fixed BASE_WIDTH plus
-            # the strip would let the 8 buttons squeeze the strip below its
-            # minimum and push the label under the reset/stop controls.
-            self.setFixedWidth(self.layout().sizeHint().width())
-        else:
-            self.setFixedWidth(self.BASE_WIDTH)
-        if self.isVisible():
-            self._recenter()
+    def _expand_timer_strip(self):
+        """Animate the capsule growing to fit the timer strip.
+
+        The strip is made visible first so its full content width can be
+        measured; the extent animation then glides the strip (and capsule) out
+        to that target, revealing content left-to-right via the growing mask.
+        The strip is dropped back out of the layout only once fully collapsed
+        (handled inside _apply_timer_extent at extent 0)."""
+        self.timer_display.setVisible(True)
+        self._refresh_timer_display()
+        self._full_strip_w = self.timer_display.layout().sizeHint().width()
+        self._animate_timer_extent(1.0)
+
+    def _collapse_timer_strip(self):
+        """Animate the capsule shrinking back to its base width.
+
+        The strip stays clipped in the layout as the extent falls, so the
+        curtain closes smoothly; at extent 0 it is removed entirely."""
+        self._animate_timer_extent(0.0)
 
     def _recenter(self):
         """Re-center horizontally on the current screen, keeping the Y."""
@@ -208,23 +215,20 @@ class CapsuleBar(QWidget):
 
     def _on_timer_state(self, state):
         if state == "running":
-            self.timer_display.setVisible(True)
-            # Set the time text first so the width sync below sizes the
-            # capsule to the actual content (the label is now dynamic width).
-            self._refresh_timer_display()
-            self._sync_timer_width()
-            # A timer started from the capsule is already visible; this also
-            # covers edge cases where the strip must surface the countdown.
+            # Surface the capsule first (no-op when already visible), then
+            # expand the strip — the whole bar glides wider around its center.
             self.show_capsule()
+            self._expand_timer_strip()
         elif state == "paused":
             self._refresh_timer_display()
             # The pause label can be narrower than the running one (e.g.
-            # 倒计时 -> 暂停); re-fit the capsule so the gaps stay balanced.
-            self._sync_timer_width()
+            # 倒计时 -> 暂停); re-measure and settle the strip at full extent
+            # so the gaps stay balanced (direct refit, no animation).
+            self._full_strip_w = self.timer_display.layout().sizeHint().width()
+            self._set_timer_extent(1.0)
         elif state == "idle":
-            # Reset / countdown finished: retract the strip.
-            self.timer_display.setVisible(False)
-            self._sync_timer_width()
+            # Reset / countdown finished: retract the strip with an animation.
+            self._collapse_timer_strip()
 
     def _on_timer_finished(self, phase):
         """A phase completed: beep + transient notice in the strip. Pomodoro
@@ -244,8 +248,7 @@ class CapsuleBar(QWidget):
     def _retract_timer_strip(self):
         # If a new timer was started meanwhile, keep the strip up.
         if not self.timer.is_active():
-            self.timer_display.setVisible(False)
-            self._sync_timer_width()
+            self._collapse_timer_strip()
 
     def set_tools_hidden(self, hidden_keys):
         """Show/hide tool buttons per the `hidden_tools` config list.
@@ -300,6 +303,70 @@ class CapsuleBar(QWidget):
         self.opacity_anim.setDuration(300)
         self.opacity_anim.setEasingCurve(QEasingCurve.OutCubic)
 
+        # Animated expand/collapse of the timer strip: a 0..1 extent property
+        # drives the strip's visible width (clipped by a mask for a clean
+        # curtain reveal) and the capsule's width (set to exactly what the
+        # layout needs), so the strip glides out on start and back in on
+        # reset / finish without any clipped or residual content.
+        self._timer_extent = 0.0
+        self._full_strip_w = 0
+        self._timer_width_anim = QPropertyAnimation(self, b"timerExpand")
+        self._timer_width_anim.setDuration(300)
+        self._timer_width_anim.setEasingCurve(QEasingCurve.OutCubic)
+
+    # ----- timer strip expand / collapse -----
+
+    def _get_timer_extent(self):
+        return self._timer_extent
+
+    def _set_timer_extent(self, p):
+        self._timer_extent = float(p)
+        self._apply_timer_extent(self._timer_extent)
+
+    timerExpand = Property(float, _get_timer_extent, _set_timer_extent)
+
+    def _apply_timer_extent(self, p):
+        """Sync the strip width, mask and capsule width to the expand extent.
+
+        The strip is clipped to a growing width (curtain reveal), so its label
+        and buttons never spill past the plate while it is only partially
+        expanded. The capsule width is always the layout's natural sizeHint —
+        the divider (the strip's right edge) is thereby locked to the exact
+        boundary between the strip content and the tool cluster, so no tool
+        button can ever be pushed under the divider. At extent 0 the strip
+        leaves the layout, leaving the plain base capsule with no residue."""
+        p = max(0.0, min(1.0, p))
+        if p <= 0.001:
+            if not self.timer_display.isHidden():
+                self.timer_display.setVisible(False)
+            self.timer_display.clearMask()
+            w = self.layout().sizeHint().width()
+            if w != self.width():
+                self.setFixedWidth(w)
+            if self.isVisible():
+                self._recenter()
+            return
+        if self.timer_display.isHidden():
+            self.timer_display.setVisible(True)
+        strip_w = int(round(p * self._full_strip_w))
+        self.timer_display.setFixedWidth(strip_w)
+        if p >= 0.999:
+            self.timer_display.clearMask()
+        else:
+            self.timer_display.setMask(QRegion(
+                QRect(0, 0, max(1, strip_w), self.timer_display.height())))
+        w = self.layout().sizeHint().width()
+        if w != self.width():
+            self.setFixedWidth(w)
+        if self.isVisible():
+            self._recenter()
+
+    def _animate_timer_extent(self, target):
+        self._timer_width_anim.stop()
+        self._timer_width_anim.setStartValue(self._timer_extent)
+        self._timer_width_anim.setEndValue(float(target))
+        self._timer_width_anim.start()
+
     def paintEvent(self, event):
         # Shared pill look (gradient body + family hairline) so the capsule
         # and the annotation sub-bar read as one design family.
@@ -353,6 +420,7 @@ class CapsuleBar(QWidget):
     def shutdown(self):
         """Release OS resources. Call from CapRise.exit_app before quit."""
         self._mouse_hook.uninstall()
+        self.timer.shutdown()
 
     def event(self, event):
         """ESC key when the capsule itself has keyboard focus."""

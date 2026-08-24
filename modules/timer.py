@@ -16,7 +16,7 @@ import time
 
 from PySide6.QtCore import (
     QObject, QTimer, Signal, Qt, QRectF, QPropertyAnimation,
-    QEasingCurve
+    QEasingCurve, Property
 )
 from PySide6.QtGui import (
     QColor, QPainter, QPen, QFont, QFontMetrics, QPalette
@@ -27,8 +27,8 @@ from PySide6.QtWidgets import (
 )
 
 from modules.i18n import I18n
-from modules.icons import ICON_ROTATE_CCW, ICON_CLOSE
-from modules.widgets import GlassIconButton, paint_pill
+from modules.icons import ICON_ROTATE_CCW, ICON_CLOSE, ICON_TIMER
+from modules.widgets import GlassIconButton, paint_pill, make_pixmap
 from modules.config import Config
 from modules.family import FamilyWindowRegistry
 
@@ -51,15 +51,30 @@ def format_hms(seconds):
 class TimerManager(QObject):
     """Owns the countdown clock.
 
-    Drift-free: the end time is a monotonic timestamp and each 1s tick
+    Drift-free: the end time is a monotonic timestamp and each tick
     recomputes the remaining seconds from it; pausing just freezes the
     remaining value and stops the ticker.
+
+    The cadence is a single GUI-thread QTimer at a sub-second interval
+    (REFRESH_MS). It never decrements a counter — every fire recomputes the
+    remaining time straight from the monotonic end timestamp, so the value
+    shown is always the true remaining time even when a fire arrives late
+    (timer coalescing, a momentarily busy event loop). A cross-thread worker
+    clock is deliberately avoided: its queued-signal delivery can be stalled
+    by thread scheduling / GIL contention, which made the label freeze and
+    then jump several seconds. Here all real work happens on the GUI thread,
+    so the display simply follows the wall clock.
     """
 
     phase_changed = Signal(str)   # "focus" | "break" | "countdown"
     tick = Signal(int)            # remaining seconds
     state_changed = Signal(str)   # "running" | "paused" | "idle" | "finished"
     finished = Signal(str)        # the phase that just completed
+
+    # Sub-second cadence: the label only changes once per second, so this
+    # interval just bounds how promptly a second boundary is picked up after
+    # any event-loop hiccup (<= 200 ms), never the countdown accuracy.
+    REFRESH_MS = 200
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -72,7 +87,7 @@ class TimerManager(QObject):
         self._break_min = 5
         self._duration_min = 25
         self._timer = QTimer(self)
-        self._timer.setInterval(1000)
+        self._timer.setInterval(self.REFRESH_MS)
         self._timer.timeout.connect(self._on_tick)
 
     # ----- public API -----
@@ -118,6 +133,34 @@ class TimerManager(QObject):
         self.state_changed.emit("idle")
         self.tick.emit(0)
 
+    def reset_phase(self):
+        """Restart the current phase from its full configured duration.
+
+        Unlike reset() (full cancel), this keeps the timer active — the
+        countdown jumps back to e.g. 25:00 and keeps its running/paused
+        state. No-op when no timer is running."""
+        if self._phase is None:
+            return
+        seconds = self._phase_seconds(self._phase)
+        self._remaining = seconds
+        if self._paused:
+            # Stay paused at the fresh full value; the label updates below.
+            self._timer.stop()
+            self.tick.emit(seconds)
+            self.state_changed.emit("paused")
+        else:
+            self._end_ts = time.monotonic() + seconds
+            self._timer.start()
+            self.tick.emit(seconds)
+            self.state_changed.emit("running")
+
+    def _phase_seconds(self, phase):
+        if phase == "focus":
+            return self._focus_min * 60
+        if phase == "break":
+            return self._break_min * 60
+        return self._duration_min * 60
+
     def phase(self):
         return self._phase
 
@@ -129,6 +172,12 @@ class TimerManager(QObject):
 
     def is_paused(self):
         return self._paused
+
+    def shutdown(self):
+        """Stop the countdown (called on app exit). The QTimer is a child
+        of this object, so it is torn down automatically; this keeps the
+        API stable for the capsule's exit path."""
+        self._timer.stop()
 
     # ----- internals -----
 
@@ -147,7 +196,9 @@ class TimerManager(QObject):
         remaining = int(math.ceil(self._end_ts - time.monotonic()))
         if remaining <= 0:
             self._complete_phase()
-        else:
+        elif remaining != self._remaining:
+            # Emit only when the displayed second actually changes — most
+            # fires land inside the same second.
             self._remaining = remaining
             self.tick.emit(remaining)
 
@@ -229,9 +280,11 @@ class TimerDisplay(QWidget):
         self._label.clicked.connect(self.pause_toggled)
         lay.addWidget(self._label)
 
-        # Compact vertical control column on the right: reset above, stop
-        # below. Small buttons so they never crowd the time text.
-        controls = QVBoxLayout()
+        # Compact horizontal control row on the right: reset then stop, side
+        # by side, so the controls stay a single row high and read level with
+        # the time text (a vertical stack made the buttons tower over the
+        # other capsule icons).
+        controls = QHBoxLayout()
         controls.setSpacing(2)
         self._btn_reset = GlassIconButton(
             ICON_ROTATE_CCW, I18n.tr("timer_reset_tip"), size=self.BTN,
@@ -313,7 +366,11 @@ class WheelNumberPicker(QWidget):
 
     The current value is centered and highlighted on a translucent chip;
     neighbours are dimmed above/below. Scrolling the wheel or dragging
-    vertically changes the value. Emits valueChanged(int).
+    vertically changes the value, and every change glides through a short
+    scroll animation: a float display value drives the row positions, so the
+    numbers slide like a real alarm wheel instead of snapping. The integer
+    value commits immediately (value() stays correct mid-animation), while
+    the visible rows catch up. Emits valueChanged(int).
     """
 
     valueChanged = Signal(int)
@@ -327,22 +384,54 @@ class WheelNumberPicker(QWidget):
         self._min = int(minimum)
         self._max = max(self._min, int(maximum))
         self._value = max(self._min, min(self._max, int(value)))
+        self._fv = float(self._value)  # float display value (scroll position)
         self._suffix = suffix
         self._drag_y = None
-        self._drag_base = 0
+        self._drag_base = 0.0
         self.setFixedSize(self.W, self.ROW * self.ROWS)
         self.setCursor(Qt.PointingHandCursor)
         self.setMouseTracking(True)
 
+        self._anim = QPropertyAnimation(self, b"wheelScroll")
+        self._anim.setDuration(220)
+        self._anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._anim.finished.connect(self._on_anim_finished)
+
+    # ----- scroll property (driven by the animation) -----
+
+    def _get_wheel_scroll(self):
+        return self._fv
+
+    def _set_wheel_scroll(self, fv):
+        self._fv = fv
+        self.update()
+
+    wheelScroll = Property(float, _get_wheel_scroll, _set_wheel_scroll)
+
     def value(self):
         return self._value
 
-    def setValue(self, value):
+    def setValue(self, value, animate=True):
         v = max(self._min, min(self._max, int(value)))
-        if v != self._value:
-            self._value = v
-            self.valueChanged.emit(v)
-            self.update()
+        if v == self._value:
+            return
+        # Commit the integer immediately so value() never reads a stale
+        # target; the animation only catches the visible rows up.
+        self._value = v
+        self.valueChanged.emit(v)
+        if animate:
+            self._anim.stop()
+            self._anim.setStartValue(self._fv)
+            self._anim.setEndValue(float(v))
+            self._anim.start()
+        else:
+            self._anim.stop()
+            self._fv = float(v)
+        self.update()
+
+    def _on_anim_finished(self):
+        self._fv = float(self._value)
+        self.update()
 
     def _bump(self, delta):
         self.setValue(self._value + delta)
@@ -356,18 +445,36 @@ class WheelNumberPicker(QWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
+            # Drop any in-flight animation and start dragging from the
+            # current scroll position (not the settled value).
+            self._anim.stop()
             self._drag_y = event.position().y()
-            self._drag_base = self._value
+            self._drag_base = self._fv
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         if self._drag_y is not None:
-            steps = int(round((self._drag_y - event.position().y()) / self.ROW))
-            self.setValue(self._drag_base + steps)
+            # The wheel follows the pointer 1:1 (1 row per ROW px of travel);
+            # the integer value is committed live as it rounds.
+            fv = self._drag_base + (self._drag_y - event.position().y()) / self.ROW
+            fv = max(float(self._min), min(float(self._max), fv))
+            self._fv = fv
+            v = int(round(fv))
+            if v != self._value:
+                self._value = v
+                self.valueChanged.emit(v)
+            self.update()
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        self._drag_y = None
+        if self._drag_y is not None:
+            self._drag_y = None
+            v = max(self._min, min(self._max, int(round(self._fv))))
+            self._fv = float(v)
+            if v != self._value:
+                self._value = v
+                self.valueChanged.emit(v)
+            self.update()
         super().mouseReleaseEvent(event)
 
     def _text(self, value):
@@ -379,8 +486,9 @@ class WheelNumberPicker(QWidget):
         accent = QApplication.palette().color(QPalette.Highlight)
         text = QApplication.palette().color(QPalette.WindowText)
 
-        # Center highlight chip.
+        # Center highlight chip (fixed; the numbers scroll beneath it).
         mid = (self.ROWS - 1) // 2
+        y_mid = mid * self.ROW + self.ROW / 2
         chip = QRectF(0, mid * self.ROW + 2, self.W, self.ROW - 4)
         c = QColor(accent)
         c.setAlpha(70)
@@ -388,18 +496,26 @@ class WheelNumberPicker(QWidget):
         p.setBrush(c)
         p.drawRoundedRect(chip, 8, 8)
 
-        for i in range(self.ROWS):
-            val = self._value + (i - mid)
+        # Float display value -> each value's vertical centre slides
+        # continuously, so a change reads as a scroll rather than a jump.
+        fv = self._fv
+        base = int(round(fv))
+        for d in range(-self.ROWS - 1, self.ROWS + 2):
+            val = base + d
             if val < self._min or val > self._max:
                 continue
+            yc = y_mid + (val - fv) * self.ROW
+            if yc < -self.ROW or yc > self.height() + self.ROW:
+                continue
+            dist = abs(yc - y_mid) / self.ROW
             f = QFont()
-            f.setPointSize(13 if i == mid else 10)
-            f.setBold(i == mid)
+            f.setPointSize(13 if dist < 0.5 else 10)
+            f.setBold(dist < 0.5)
             col = QColor(text)
-            col.setAlphaF(1.0 if i == mid else max(0.15, 1.0 - abs(i - mid) * 0.5))
+            col.setAlphaF(max(0.15, 1.0 - dist * 0.5))
             p.setFont(f)
             p.setPen(col)
-            p.drawText(QRectF(0, i * self.ROW, self.W, self.ROW),
+            p.drawText(QRectF(0, yc - self.ROW / 2, self.W, self.ROW),
                        Qt.AlignCenter, self._text(val))
         p.end()
 
@@ -516,9 +632,12 @@ class TimerDialog(QDialog):
         mode = c.get("timer_mode", "pomodoro")
         self._btn_pomo.setChecked(mode != "countdown")
         self._btn_count.setChecked(mode == "countdown")
-        self._focus_pick.setValue(int(c.get("timer_focus_min", 25)))
-        self._break_pick.setValue(int(c.get("timer_break_min", 5)))
-        self._dur_pick.setValue(int(c.get("timer_duration_min", 25)))
+        self._focus_pick.setValue(int(c.get("timer_focus_min", 25)),
+                                  animate=False)
+        self._break_pick.setValue(int(c.get("timer_break_min", 5)),
+                                  animate=False)
+        self._dur_pick.setValue(int(c.get("timer_duration_min", 25)),
+                                animate=False)
         # Programmatic setChecked above doesn't emit buttonClicked, so sync the
         # visible fields with the loaded mode explicitly.
         self._update_mode_fields()
@@ -584,12 +703,16 @@ class TimerDialog(QDialog):
 
 
 class TimerNoticeOverlay(QWidget):
-    """Independent glass notice card popped when a countdown finishes.
+    """Compact capsule-style notice popped when a countdown finishes.
 
     Deliberately independent of the capsule: if the capsule was hidden while
-    the timer ran, the user still sees the "finished" card. Fades in, then
-    auto-closes after a few seconds or on the OK button.
+    the timer ran, the user still sees the "finished" card. Rendered as a
+    small horizontal glass capsule — a line timer icon, the message and the
+    OK button all on a single row — that fades in and auto-closes after a
+    few seconds or on the button.
     """
+
+    H = 52  # pill height (rounded ends: radius = H / 2)
 
     def __init__(self, message, parent=None):
         super().__init__(parent)
@@ -598,46 +721,41 @@ class TimerNoticeOverlay(QWidget):
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
-        self.setFixedSize(340, 128)
         self._message = message
+        self.setFixedHeight(self.H)
 
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(24, 16, 24, 14)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(18, 10, 12, 10)
         lay.setSpacing(10)
 
-        title = QLabel(I18n.tr("timer"))
-        title.setAlignment(Qt.AlignCenter)
-        tf = QFont()
-        tf.setPointSize(9)
-        title.setFont(tf)
-        title.setStyleSheet("color: rgba(128, 128, 128, 210);")
-        lay.addWidget(title)
+        # Line-style timer icon echoing the capsule's icon language.
+        icon_color = QApplication.palette().color(QPalette.WindowText)
+        icon_hex = (f"#{icon_color.red():02x}{icon_color.green():02x}"
+                    f"{icon_color.blue():02x}")
+        icon = QLabel()
+        icon.setPixmap(make_pixmap(ICON_TIMER, icon_hex, 18))
+        lay.addWidget(icon)
 
         msg = QLabel(message)
-        msg.setAlignment(Qt.AlignCenter)
         mf = QFont()
-        mf.setPointSize(15)
+        mf.setPointSize(13)
         mf.setBold(True)
         msg.setFont(mf)
         lay.addWidget(msg)
 
         btn = QPushButton(I18n.tr("timer_ok"))
         btn.setCursor(Qt.PointingHandCursor)
-        btn.setFixedSize(96, 30)
+        btn.setFixedSize(64, 28)
         btn.setStyleSheet("""
-            QPushButton { border: none; border-radius: 15px;
+            QPushButton { border: none; border-radius: 14px;
                           background: palette(highlight); color: white;
                           font-weight: 600; }
             QPushButton:hover { background: palette(highlight);
                                 border: 1px solid rgba(255, 255, 255, 150);
-                                border-radius: 14px; }
+                                border-radius: 13px; }
         """)
         btn.clicked.connect(self._close_soon)
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        btn_row.addWidget(btn)
-        btn_row.addStretch()
-        lay.addLayout(btn_row)
+        lay.addWidget(btn)
 
         self._opacity_anim = QPropertyAnimation(self, b"windowOpacity")
         self._opacity_anim.setDuration(300)
@@ -649,7 +767,9 @@ class TimerNoticeOverlay(QWidget):
         self._auto_close.setInterval(5000)
         self._auto_close.timeout.connect(self._close_soon)
 
-        # Position near the top-centre of the screen so it reads as a notice.
+        # Fit the width to the content, then center it near the top of the
+        # screen so it reads as a notice.
+        self.resize(self.layout().sizeHint().width(), self.H)
         screen = QApplication.primaryScreen().availableGeometry()
         self.move(screen.center().x() - self.width() // 2, screen.y() + 40)
 
@@ -676,7 +796,7 @@ class TimerNoticeOverlay(QWidget):
 
     def paintEvent(self, event):
         p = QPainter(self)
-        paint_pill(p, self.rect(), 22)
+        paint_pill(p, self.rect(), self.H // 2)
         p.end()
 
     def closeEvent(self, event):
