@@ -230,7 +230,15 @@ class AboutPage(QWidget):
             )
             check_btn = QPushButton(I18n.tr("about_check_update"))
             check_btn.setCursor(Qt.PointingHandCursor)
-            check_btn.setFixedSize(links_width, 34)
+            # Never smaller than the button's own text at 13px (English
+            # "Check for Updates" is long and overflows the link-row width),
+            # but at least links_width so it still aligns with the links.
+            btn_font = QFont(self.font())
+            btn_font.setPixelSize(13)
+            btn_fm = QFontMetrics(btn_font)
+            btn_min = btn_fm.horizontalAdvance(
+                I18n.tr("about_check_update")) + 32
+            check_btn.setFixedSize(max(links_width, btn_min), 34)
             check_btn.setStyleSheet(
                 f"QPushButton {{ background: {_accent_hex()}; color: white;"
                 f" border: none; border-radius: 8px; font-size: 13px; }}"

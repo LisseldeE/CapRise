@@ -1,11 +1,11 @@
 """Global search window (spotlight-style).
 
 A floating search card with an input box, three scope toggles (全局文件 /
-安装软件 / 系统设置) and a results card. Safe calculation results and
+安装软件 / 系统内容) and a results card. Safe calculation results and
 matches against installed apps (read from the registry Uninstall keys in the
 background) are both inline; the "全局文件" scope is backed by the Everything
 (ET) software through its bundled es.exe command-line tool, and the
-"系统设置" scope matches Windows settings pages (ms-settings: URIs) plus
+"系统内容" scope matches Windows settings pages (ms-settings: URIs) plus
 CapRise's own settings pages.
 
 The window is a "family window" (registered with FamilyWindowRegistry) so
@@ -27,7 +27,7 @@ from collections import deque
 from pathlib import Path
 
 from PySide6.QtCore import (
-    Qt, Signal, QSize, QPoint, QPointF, QRectF, QPropertyAnimation,
+    Qt, QRect, Signal, QSize, QPoint, QPointF, QRectF, QPropertyAnimation,
     QVariantAnimation, QEasingCurve, QTimer, QEvent, QFileInfo, QUrl
 )
 from PySide6.QtGui import (
@@ -36,7 +36,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QScrollArea,
-    QApplication, QAbstractButton, QFileIconProvider, QMessageBox
+    QApplication, QAbstractButton, QFileIconProvider, QMessageBox, QLayout
 )
 
 from modules.icons import (
@@ -46,6 +46,8 @@ from modules.i18n import I18n
 from modules.family import FamilyWindowRegistry
 from modules.config import Config
 from modules.widgets import make_pixmap, system_color, screen_dpr
+from modules.pinyin_match import (
+    has_chinese, fuzzy_match, warm as warm_pinyin)
 
 
 # --------------------------------------------------------------------------
@@ -258,6 +260,7 @@ _SYSTEM_SETTINGS = [
     # These open via the legacy control-panel applets / MMC consoles / system
     # tools instead of ms-settings: URIs, so the activation handler launches
     # them as commands (subprocess) rather than os.startfile(uri).
+    ("explorer ::{20D04FE0-3AEA-1069-A2D8-08002B30309D}", "此电脑", "This PC", ["此电脑", "文件资源管理器", "资源管理器", "我的电脑", "计算机", "this pc", "my computer", "explorer", "电脑"]),
     ("control", "控制面板", "Control Panel", ["控制面板", "control panel", "控制", "control"]),
     ("appwiz.cpl", "程序和功能", "Programs and Features", ["卸载程序", "卸载", "更改程序", "programs", "uninstall", "appwiz"]),
     ("ncpa.cpl", "网络连接", "Network Connections", ["网络连接", "适配器", "network connections", "adapter", "ncpa"]),
@@ -301,12 +304,20 @@ def _setting_name(zh, en):
     return zh if I18n.get_language() == "zh_CN" else en
 
 
-def _setting_matches(text, zh, en, keywords):
-    """Substring match of `text` (lowercased) against both names + keywords."""
+def _setting_matches(text, zh, en, keywords, fuzzy=False):
+    """Match `text` (lowercased) against a settings entry.
+
+    Orders: plain substring of the zh/en names, substring of any keyword, then
+    (when `fuzzy` is on) pinyin match of the Chinese name so e.g. "wl" matches
+    "网络和 Internet". """
     t = text.lower()
     if t in zh.lower() or t in en.lower():
         return True
-    return any(t in k.lower() for k in keywords)
+    if any(t in k.lower() for k in keywords):
+        return True
+    if fuzzy and has_chinese(zh):
+        return fuzzy_match(text, zh)
+    return False
 
 
 # --------------------------------------------------------------------------
@@ -505,6 +516,10 @@ def start_app_index():
             except Exception:
                 _INDEX_APPS = []
             finally:
+                # Warm the pinyin cache for Chinese app names so the first
+                # fuzzy query never pays a conversion cost.
+                for _app in _INDEX_APPS:
+                    warm_pinyin(_app.get("name") or "")
                 _INDEX_READY = True
 
         _INDEX_THREAD = threading.Thread(
@@ -560,6 +575,30 @@ def _get_file_icon(path):
     cached = icon if not icon.isNull() else None
     _FILE_ICON_CACHE[key] = cached
     return cached
+
+
+def _system_tool_icon(cmd):
+    """Best real Windows icon for a system-tool command row.
+
+    `cmd` is the subprocess command for the row (e.g. "explorer ::{...}",
+    "sysdm.cpl", "taskmgr", "compmgmt.msc"). The leading token is resolved to
+    an absolute path inside System32 (or via PATH) and its real file icon is
+    returned; None if nothing resolves so callers can fall back to a generic
+    icon."""
+    head = (cmd or "").split()[0].strip()
+    if not head:
+        return None
+    if os.path.isabs(head) and os.path.exists(head):
+        return _get_file_icon(head)
+    root = os.environ.get("SystemRoot") or r"C:\Windows"
+    for base in (root,):
+        cand = os.path.join(base, "System32", head)
+        if os.path.exists(cand):
+            return _get_file_icon(cand)
+    via_path = shutil.which(head)
+    if via_path:
+        return _get_file_icon(via_path)
+    return None
 
 
 def _app_icon(app, launch):
@@ -749,6 +788,71 @@ def _blend(c1, c2, t):
         int(c1.green() + (c2.green() - c1.green()) * t),
         int(c1.blue() + (c2.blue() - c1.blue()) * t),
     )
+
+
+class FlowLayout(QLayout):
+    """Minimal flow layout: places items left-to-right and wraps to the next
+    line when they no longer fit the available width. Used for the scope
+    toggle row so longer localized labels (e.g. "System Settings") wrap
+    instead of overflowing the fixed card width."""
+
+    def __init__(self, parent=None, hspacing=18, vspacing=8):
+        super().__init__(parent)
+        self._hs, self._vs = hspacing, vspacing
+        self._items = []
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientations()
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for item in self._items:
+            s = item.sizeHint()
+            size.setWidth(max(size.width(), s.width()))
+            size.setHeight(max(size.height(), s.height()))
+        left, top, right, bottom = self.getContentsMargins()
+        return QSize(size.width() + left + right, size.height() + top + bottom)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._do_layout(QRect(0, 0, width, 0), test=True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._do_layout(rect, test=False)
+
+    def _do_layout(self, rect, test):
+        left, top, right, bottom = self.getContentsMargins()
+        effective = rect.adjusted(left, top, -right, -bottom)
+        x, y, line_h = effective.x(), effective.y(), 0
+        for item in self._items:
+            iw, ih = item.sizeHint().width(), item.sizeHint().height()
+            if x + iw > effective.right() + 1 and line_h > 0:
+                x = effective.x()
+                y += line_h + self._vs
+                line_h = 0
+            if not test:
+                item.setGeometry(QRect(QPoint(x, y), QSize(iw, ih)))
+            x += iw + self._hs
+            line_h = max(line_h, ih)
+        return y + line_h - rect.y() + bottom
 
 
 class ToggleSwitch(QAbstractButton):
@@ -1010,7 +1114,7 @@ class SearchWindow(QWidget):
         self._file_loading_row = None
         self._file_section_lbl = None
         # Windows system-settings / CapRise own-settings section headers
-        # (both live under the same 系统设置 switch).
+        # (both live under the same 系统内容 switch).
         self._settings_section_lbl = None
         self._app_settings_section_lbl = None
 
@@ -1046,16 +1150,17 @@ class SearchWindow(QWidget):
         # --- input row ---
         self._input_wrap = QWidget()
         self._input_wrap.setObjectName("searchInputWrap")
-        self._input_wrap.setFixedHeight(40)
+        # Underline input style: no box fill, only a hairline at the bottom
+        # that tints to the highlight colour while focused.
         self._input_wrap.setStyleSheet("""
             QWidget#searchInputWrap {
-                background: palette(base);
-                border: 1px solid rgba(128,128,128,100);
-                border-radius: 10px;
+                background: transparent;
+                border: none;
+                border-bottom: 1px solid palette(mid);
             }
         """)
         inp_lay = QHBoxLayout(self._input_wrap)
-        inp_lay.setContentsMargins(12, 0, 8, 0)
+        inp_lay.setContentsMargins(12, 6, 12, 6)
         inp_lay.setSpacing(8)
         icon_lbl = QLabel()
         icon_lbl.setFixedSize(18, 18)
@@ -1078,9 +1183,11 @@ class SearchWindow(QWidget):
         root.addWidget(self._input_wrap)
 
         # --- scope toggles ---
-        toggles = QHBoxLayout()
+        # Flow layout so longer localized labels wrap to a second line
+        # instead of overflowing the fixed card width.
+        toggles = FlowLayout()
         toggles.setContentsMargins(4, 10, 4, 6)
-        toggles.setSpacing(18)
+        toggles._hs, toggles._vs = 18, 8
         self.switch_files = ToggleSwitch(I18n.tr("search_global_files"))
         # Restore the persisted file-search switch (default off). Only
         # re-enable when Everything is already provisioned; otherwise keep
@@ -1094,17 +1201,23 @@ class SearchWindow(QWidget):
         self.switch_apps = ToggleSwitch(I18n.tr("search_installed_apps"))
         # Restore the persisted 安装软件 switch (default on).
         self.switch_apps.setChecked(Config().get("search_apps_enabled", True))
-        # 系统设置 switch — gates BOTH Windows system-settings (ms-settings
+        # 系统内容 switch — gates BOTH Windows system-settings (ms-settings
         # URIs) and CapRise's own settings pages. Default off (no external
         # dependency, but kept conservative so the results stay focused).
         self.switch_settings = ToggleSwitch(I18n.tr("search_app_settings"))
         self.switch_settings.setChecked(
             Config().get("search_settings_enabled", False))
+        # 模糊匹配 switch — when on, queries also match Chinese names via
+        # pinyin (full-spelling + initials), e.g. "weix"/"wx" -> 微信.
+        self.switch_fuzzy = ToggleSwitch(I18n.tr("search_fuzzy"))
+        self.switch_fuzzy.setChecked(
+            Config().get("search_fuzzy_enabled", True))
         toggles.addWidget(self.switch_files)
         toggles.addWidget(self.switch_apps)
         toggles.addWidget(self.switch_settings)
-        toggles.addStretch()
+        toggles.addWidget(self.switch_fuzzy)
         root.addLayout(toggles)
+        self._toggles_layout = toggles
 
         # --- separator ---
         # Hidden together with the results area so it never draws as a
@@ -1148,6 +1261,7 @@ class SearchWindow(QWidget):
         self.switch_files.toggled.connect(self._on_files_toggle)
         self.switch_apps.toggled.connect(self._on_scope_changed)
         self.switch_settings.toggled.connect(self._on_settings_toggle)
+        self.switch_fuzzy.toggled.connect(self._on_fuzzy_toggle)
         # Results from the ET worker thread arrive here (queued connection).
         self.file_results_ready.connect(self._on_file_results_ready)
 
@@ -1224,17 +1338,17 @@ class SearchWindow(QWidget):
             if event.type() == QEvent.FocusIn:
                 self._input_wrap.setStyleSheet("""
                     QWidget#searchInputWrap {
-                        background: palette(base);
-                        border: 1px solid palette(highlight);
-                        border-radius: 10px;
+                        background: transparent;
+                        border: none;
+                        border-bottom: 1px solid palette(highlight);
                     }
                 """)
             elif event.type() == QEvent.FocusOut:
                 self._input_wrap.setStyleSheet("""
                     QWidget#searchInputWrap {
-                        background: palette(base);
-                        border: 1px solid rgba(128,128,128,100);
-                        border-radius: 10px;
+                        background: transparent;
+                        border: none;
+                        border-bottom: 1px solid palette(mid);
                     }
                 """)
         return super().eventFilter(obj, event)
@@ -1381,8 +1495,13 @@ class SearchWindow(QWidget):
         self._rebuild_results()
 
     def _on_settings_toggle(self, _=None):
-        # Persist the 系统设置 switch so it survives restarts (default off).
+        # Persist the 系统内容 switch so it survives restarts (default off).
         Config().set("search_settings_enabled", self.switch_settings.isChecked())
+        self._rebuild_results()
+
+    def _on_fuzzy_toggle(self, _=None):
+        # Persist the 模糊匹配 switch so it survives restarts (default on).
+        Config().set("search_fuzzy_enabled", self.switch_fuzzy.isChecked())
         self._rebuild_results()
 
     def _on_index_poll(self):
@@ -1595,43 +1714,42 @@ class SearchWindow(QWidget):
                 self._add_section(I18n.tr("search_category_apps"))
                 self._add_loading_row()
             else:
-                matches = [a for a in apps
-                           if text.lower() in a["name"].lower()]
+                if self.switch_fuzzy.isChecked():
+                    matches = [a for a in apps
+                               if fuzzy_match(text, a["name"])]
+                else:
+                    matches = [a for a in apps
+                               if text.lower() in a["name"].lower()]
                 if matches:
                     self._apps_section_lbl = self._add_section(
                         I18n.tr("search_category_apps"))
                     for app in matches:
                         self._pending_rows.append(("app", app))
 
-        # 3) System settings — Windows settings pages (ms-settings: URIs) go
-        #    under the 系统设置 header; classic control-panel applets / MMC
-        #    consoles / system tools (control, devmgmt.msc, ...) are treated
-        #    as programs and land under the 应用 header instead. CapRise's
-        #    own settings pages get their own 应用设置 header. Placed BEFORE
-        #    the files section so the up/down arrow traversal reaches the
-        #    settings groups above the (usually larger) file list.
+        # 3) System settings — Windows settings pages (ms-settings: URIs)
+        #    AND classic control-panel applets / MMC consoles / system tools
+        #    (control, devmgmt.msc, ...) all sit under the 系统内容 header,
+        #    matching the user-facing scope name. CapRise's own settings
+        #    pages get their own 应用设置 header. Placed BEFORE the files
+        #    section so the up/down arrow traversal reaches the settings
+        #    groups above the (usually larger) file list.
         if self.switch_settings.isChecked():
+            fuzzy = self.switch_fuzzy.isChecked()
             sys_pages = [s for s in _SYSTEM_SETTINGS
                          if s[0].startswith("ms-settings:")
-                         and _setting_matches(text, s[1], s[2], s[3])]
-            if sys_pages:
+                         and _setting_matches(text, s[1], s[2], s[3], fuzzy)]
+            sys_tools = [s for s in _SYSTEM_SETTINGS
+                         if not s[0].startswith("ms-settings:")
+                         and _setting_matches(text, s[1], s[2], s[3], fuzzy)]
+            if sys_pages or sys_tools:
                 self._settings_section_lbl = self._add_section(
                     I18n.tr("search_category_system_settings"))
                 for s in sys_pages:
                     self._pending_rows.append(("system_setting", s))
-            sys_tools = [s for s in _SYSTEM_SETTINGS
-                         if not s[0].startswith("ms-settings:")
-                         and _setting_matches(text, s[1], s[2], s[3])]
-            if sys_tools:
-                # Reuse the 应用 section (shared with installed apps); create
-                # it here too when the 安装软件 toggle is off.
-                if self._apps_section_lbl is None:
-                    self._apps_section_lbl = self._add_section(
-                        I18n.tr("search_category_apps"))
                 for s in sys_tools:
                     self._pending_rows.append(("system_setting", s))
             app_matches = [a for a in _APP_SETTINGS
-                           if _setting_matches(text, a[1], a[2], a[3])]
+                           if _setting_matches(text, a[1], a[2], a[3], fuzzy)]
             if app_matches:
                 self._app_settings_section_lbl = self._add_section(
                     I18n.tr("search_category_app_settings"))
@@ -1712,18 +1830,20 @@ class SearchWindow(QWidget):
     def _add_system_setting_row(self, entry):
         """Windows settings page (ms-settings: URI) or system tool result row.
 
-        ms-settings: pages sit under the 系统设置 header; classic control
-        panel / MMC / system-tool commands sit under the 应用 header."""
+        ms-settings: pages and classic control panel / MMC / system-tool
+        commands all group under the 系统内容 header."""
         uri, zh, en, _kw = entry
-        section = (self._settings_section_lbl
-                   if uri.startswith("ms-settings:")
-                   else self._apps_section_lbl)
+        # ms-settings: pages carry no file path, so they keep the generic
+        # settings glyph; classic tools resolve their real system icon.
+        icon = ICON_SETTINGS
+        if not uri.startswith("ms-settings:"):
+            icon = _system_tool_icon(uri) or icon
         row = ResultRow(
-            ICON_SETTINGS, _setting_name(zh, en),
+            icon, _setting_name(zh, en),
             I18n.tr("search_settings_hint"))
         self._append_row(row, {"kind": "system_setting", "uri": uri},
                          tooltip=I18n.tr("search_settings_open_tip"),
-                         section=section)
+                         section=self._settings_section_lbl)
 
     def _add_app_setting_row(self, entry):
         """CapRise's own settings page result row (opens the Settings dialog
@@ -1782,14 +1902,20 @@ class SearchWindow(QWidget):
             self._update_results_height()
         else:
             self.scroll.setFixedHeight(0)
-            self.setFixedHeight(110)
+            # Toggles may wrap to two lines (longer localized labels), so
+            # the empty card must be tall enough to fit them without clipping.
+            toggles_h = self._toggles_layout.heightForWidth(self.WIDTH - 24)
+            self.setFixedHeight(max(110, 12 + 40 + toggles_h + 12))
 
     def _update_results_height(self):
         """Refit the scroll area (and the card) to the current content."""
         content = self._results_content_h()
         scroll_h = max(0, min(content, self.MAX_RESULTS_H))
         self.scroll.setFixedHeight(scroll_h)
-        total = 12 + 40 + (10 + 24 + 6) + 1 + scroll_h + 12
+        # Toggles can wrap to a second line for longer localized labels, so
+        # measure the real row height instead of assuming a single 24px line.
+        toggles_h = self._toggles_layout.heightForWidth(self.WIDTH - 24)
+        total = 12 + 40 + toggles_h + 1 + scroll_h + 12
         self.setFixedHeight(max(110, total))
 
     def _results_content_h(self):

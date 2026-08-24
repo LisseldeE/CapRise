@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox,
     QListWidget, QListWidgetItem, QStackedWidget, QWidget, QFrame,
     QApplication, QGraphicsOpacityEffect, QAbstractItemView, QKeySequenceEdit,
-    QPushButton
+    QPushButton, QLineEdit
 )
 from PySide6.QtCore import (
     Qt, QSize, QByteArray, QRectF, QPropertyAnimation, QEasingCurve, Signal,
@@ -569,6 +569,103 @@ class _Sidebar(QListWidget):
         return f"#{c.red():02x}{c.green():02x}{c.blue():02x}"
 
 
+class _HotkeyEditDialog(QDialog):
+    """Modal popup to pick / replace a hotkey with an explicit done/cancel.
+
+    Owns the record widget and a `validate` callable. On "OK", validate(qseq)
+    runs; only a valid, successfully-registered sequence closes the dialog.
+    Failures stay open and are shown inline so the user always knows whether
+    the change took effect."""
+
+    def __init__(self, parent, title, current, validate):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
+        self.setModal(True)
+        self.setFixedSize(340, 190)
+        self._validate = validate
+        self.result_qseq = None
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(10)
+
+        hint = QLabel(I18n.tr("hotkey_dialog_hint"))
+        hint.setStyleSheet("font-size: 12px; color: #868e96;")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self._rec = QKeySequenceEdit()
+        self._rec.setMaximumSequenceLength(1)
+        self._rec.setFixedHeight(32)
+        # Localize the record field's empty-state hint (English by default).
+        _seq_line = self._rec.findChild(QLineEdit)
+        if _seq_line is not None:
+            _seq_line.setPlaceholderText(I18n.tr("hotkey_placeholder"))
+        if not current.isEmpty():
+            self._rec.setKeySequence(current)
+        layout.addWidget(self._rec)
+
+        self._warn = QLabel("")
+        self._warn.setStyleSheet("font-size: 11px; color: #e5484d;")
+        self._warn.setWordWrap(True)
+        self._warn.setVisible(False)
+        layout.addWidget(self._warn)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        cancel_btn = QPushButton(I18n.tr("cancel"))
+        cancel_btn.setObjectName("hotkeyCancel")
+        cancel_btn.setFixedSize(72, 30)
+        cancel_btn.setFocusPolicy(Qt.NoFocus)
+        cancel_btn.setCursor(Qt.PointingHandCursor)
+        # Hover lifts into a translucent red plate (glass effect); at rest it
+        # stays quiet so the Confirm action below reads as the primary action.
+        cancel_btn.setStyleSheet(
+            "QPushButton { background: rgba(0,0,0,0); border: 1px solid"
+            " rgba(140,150,160,90); border-radius: 15px; color: palette(text);"
+            " font-size: 13px; }"
+            "QPushButton:hover { background: rgba(229,72,77,70);"
+            " border: 1px solid rgba(229,72,77,150); color: #ffffff; }"
+            "QPushButton:pressed { background: rgba(229,72,77,120);"
+            " border: 1px solid rgba(229,72,77,190); }")
+        cancel_btn.clicked.connect(self.reject)
+        done_btn = QPushButton(I18n.tr("ok"))
+        done_btn.setFixedSize(72, 30)
+        done_btn.setFocusPolicy(Qt.NoFocus)
+        done_btn.setCursor(Qt.PointingHandCursor)
+        # Steady blue (primary action) with a softer translucent hover.
+        done_btn.setStyleSheet(
+            "QPushButton { background: #2f6feb; border: none; border-radius:"
+            " 15px; color: #ffffff; font-size: 13px; }"
+            "QPushButton:hover { background: #3f7bf0; }"
+            "QPushButton:pressed { background: #275fd4; }")
+        done_btn.clicked.connect(self._on_done)
+        btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(done_btn)
+        layout.addLayout(btn_row)
+
+    def _on_done(self):
+        qseq = self._rec.keySequence()
+        try:
+            ok, err = self._validate(qseq)
+        except Exception:
+            ok, err = False, I18n.tr("hotkey_check_failed")
+        if ok:
+            self.result_qseq = qseq
+            self.accept()
+        else:
+            self._warn.setText(err)
+            self._warn.setVisible(True)
+
+    @classmethod
+    def get_sequence(cls, parent, title, current, validate):
+        dlg = cls(parent, title, current, validate)
+        if dlg.exec() == QDialog.Accepted:
+            return dlg.result_qseq
+        return None
+
+
 class SettingsDialog(QDialog):
     """Settings dialog split into a left navigation sidebar and a right pane."""
 
@@ -789,7 +886,7 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(28, 24, 28, 24)
         layout.setSpacing(10)
 
-        self._hotkey_editors = {}
+        self._hotkey_displays = {}
 
         for hotkey_id, cfg_key, label_key, default_seq in HOTKEY_SPECS:
             row = QHBoxLayout()
@@ -798,30 +895,53 @@ class SettingsDialog(QDialog):
             label.setFixedWidth(90)
             row.addWidget(label)
 
-            editor = QKeySequenceEdit()
-            editor.setMaximumSequenceLength(1)
-            editor.setFixedHeight(30)
+            # The row shows the current hotkey as a read-only value; editing
+            # happens in a dedicated popup (Modify) with an explicit
+            # done/cancel so the user always knows the change took effect.
+            display = QLineEdit()
+            display.setReadOnly(True)
+            display.setFocusPolicy(Qt.NoFocus)
+            display.setFixedHeight(30)
+            display.setStyleSheet(
+                "QLineEdit { border: none; background: transparent;"
+                " color: palette(text); font-size: 13px; }")
             saved = Config().get(cfg_key, default_seq)
             if saved:
-                editor.setKeySequence(
-                    QKeySequence.fromString(saved, QKeySequence.PortableText))
-            self._hotkey_editors[hotkey_id] = editor
-            row.addWidget(editor, 1)
+                display.setText(saved)
+            self._hotkey_displays[hotkey_id] = display
+            row.addWidget(display, 1)
+
+            modify_btn = QPushButton(I18n.tr("hotkey_modify"))
+            modify_btn.setFixedSize(56, 30)
+            modify_btn.setCursor(Qt.PointingHandCursor)
+            modify_btn.setFocusPolicy(Qt.NoFocus)
+            modify_btn.clicked.connect(
+                lambda checked=False, hid=hotkey_id, cfg=cfg_key,
+                disp=display: self._open_modify_dialog(hid, cfg, disp))
+            row.addWidget(modify_btn)
 
             clear_btn = QPushButton(I18n.tr("hotkey_clear"))
             clear_btn.setFixedSize(56, 30)
             clear_btn.setCursor(Qt.PointingHandCursor)
+            clear_btn.setFocusPolicy(Qt.NoFocus)
             clear_btn.setToolTip(I18n.tr("hotkey_clear_tip"))
+            # Destructive action: flat square corners (same as Modify),
+            # quiet at rest, lifts into a translucent red glass plate on
+            # hover.
+            clear_btn.setStyleSheet(
+                "QPushButton { background: rgba(0,0,0,0); border: 1px solid"
+                " rgba(140,150,160,90); border-radius: 4px;"
+                " color: palette(text); font-size: 13px; }"
+                "QPushButton:hover { background: rgba(229,72,77,70);"
+                " border: 1px solid rgba(229,72,77,150); color: #ffffff; }"
+                "QPushButton:pressed { background: rgba(229,72,77,120);"
+                " border: 1px solid rgba(229,72,77,190); }")
+            clear_btn.clicked.connect(
+                lambda checked=False, hid=hotkey_id, cfg=cfg_key,
+                disp=display: self._clear_hotkey(hid, cfg, disp))
             row.addWidget(clear_btn)
 
             layout.addLayout(row)
-
-            editor.keySequenceChanged.connect(
-                lambda seq, hid=hotkey_id, cfg=cfg_key,
-                ed=editor: self._apply_hotkey(hid, cfg, ed))
-            clear_btn.clicked.connect(
-                lambda checked=False, hid=hotkey_id, cfg=cfg_key,
-                ed=editor: self._clear_hotkey(hid, cfg, ed))
 
         # Inline (non-modal) feedback for rejected combinations.
         self._hotkey_warn = QLabel("")
@@ -841,7 +961,18 @@ class SettingsDialog(QDialog):
         reset_btn = QPushButton(I18n.tr("hotkey_reset"))
         reset_btn.setFixedSize(70, 30)
         reset_btn.setCursor(Qt.PointingHandCursor)
+        reset_btn.setFocusPolicy(Qt.NoFocus)
         reset_btn.setToolTip(I18n.tr("hotkey_reset_tip"))
+        # Destructive action: flat square corners (same as Modify),
+        # quiet at rest, lifts into a translucent red glass plate on hover.
+        reset_btn.setStyleSheet(
+            "QPushButton { background: rgba(0,0,0,0); border: 1px solid"
+            " rgba(140,150,160,90); border-radius: 4px; color: palette(text);"
+            " font-size: 13px; }"
+            "QPushButton:hover { background: rgba(229,72,77,70);"
+            " border: 1px solid rgba(229,72,77,150); color: #ffffff; }"
+            "QPushButton:pressed { background: rgba(229,72,77,120);"
+            " border: 1px solid rgba(229,72,77,190); }")
         reset_btn.clicked.connect(self._reset_all_hotkeys)
         btn_row.addWidget(reset_btn)
         layout.addLayout(btn_row)
@@ -849,10 +980,46 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         return page
 
-    def _clear_hotkey(self, hotkey_id, cfg_key, editor):
-        """Clear the editor and unregister the hotkey for a feature."""
-        editor.clear()
-        self._apply_hotkey(hotkey_id, cfg_key, editor, QKeySequence())
+    def _make_hotkey_validator(self, hotkey_id, cfg_key):
+        """Return validate(qseq) -> (ok, err_text|None) for one hotkey row.
+
+        Validation doubles as the "apply" step: on success the combination is
+        registered (taking effect immediately) and persisted; on failure a
+        human-readable reason is returned so the popup can show it inline."""
+
+        def validate(qseq):
+            mod, vk = qkeysequence_to_win(qseq)
+            if not is_valid_hotkey(mod, vk):
+                return False, I18n.tr("hotkey_invalid")
+            ok = True
+            if self._hotkey_mgr is not None:
+                ok = self._hotkey_mgr.register(hotkey_id, mod, vk)
+            if not ok:
+                return False, I18n.tr("hotkey_conflict").format(
+                    seq=qseq.toString(QKeySequence.PortableText))
+            seq_text = (qseq.toString(QKeySequence.PortableText) if vk
+                        else "")
+            Config().set(cfg_key, seq_text)
+            return True, None
+        return validate
+
+    def _open_modify_dialog(self, hotkey_id, cfg_key, display):
+        """Open the popup to pick a new hotkey; update the row on success."""
+        default_seq = next((d for _h, c, _l, d in HOTKEY_SPECS
+                            if c == cfg_key), "")
+        saved = Config().get(cfg_key, default_seq)
+        current = (QKeySequence.fromString(saved, QKeySequence.PortableText)
+                   if saved else QKeySequence())
+        qseq = _HotkeyEditDialog.get_sequence(
+            self, I18n.tr("hotkey_modify_title"), current,
+            self._make_hotkey_validator(hotkey_id, cfg_key))
+        if qseq is not None:
+            display.setText(qseq.toString(QKeySequence.PortableText))
+
+    def _clear_hotkey(self, hotkey_id, cfg_key, display):
+        """Clear the display and unregister the hotkey for a feature."""
+        display.setText("")
+        self._make_hotkey_validator(hotkey_id, cfg_key)(QKeySequence())
 
     def _reset_all_hotkeys(self):
         """Restore every hotkey to its spec default and persist the values.
@@ -865,20 +1032,13 @@ class SettingsDialog(QDialog):
         notice, until the combination frees up."""
         if hasattr(self, "_hotkey_warn"):
             self._hotkey_warn.setVisible(False)
-        # Pass 1: fill editors with the defaults, persist them, and clear
+        # Pass 1: fill displays with the defaults, persist them, and clear
         # every live binding.
         for hotkey_id, cfg_key, _label, default_seq in HOTKEY_SPECS:
-            editor = self._hotkey_editors.get(hotkey_id)
-            if editor is None:
-                continue
-            qseq = QKeySequence.fromString(
-                default_seq, QKeySequence.PortableText)
-            # Suppress keySequenceChanged so the editor is filled without
-            # running the normal validate/register path.
-            editor.blockSignals(True)
-            editor.setKeySequence(qseq)
-            editor.blockSignals(False)
-            Config().set(cfg_key, qseq.toString(QKeySequence.PortableText))
+            display = self._hotkey_displays.get(hotkey_id)
+            if display is not None:
+                display.setText(default_seq)
+            Config().set(cfg_key, default_seq)
             if self._hotkey_mgr is not None:
                 self._hotkey_mgr.register(hotkey_id, 0, 0)
         # Pass 2: register the defaults, ignoring occupancy failures.

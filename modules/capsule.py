@@ -16,6 +16,7 @@ from modules.icons import (
 from modules.i18n import I18n
 from modules.family import FamilyWindowRegistry
 from modules.global_mouse_hook import GlobalMouseHook
+from modules.global_esc_hook import GlobalEscapeHook
 from modules.widgets import GlassIconButton, paint_pill
 from modules.config import Config
 from modules.timer import TimerDisplay, TimerManager, TimerNoticeOverlay
@@ -107,6 +108,15 @@ class CapsuleBar(QWidget):
         self._mouse_hook = GlobalMouseHook()
         self._mouse_hook.on_outside_click = self._on_outside_click
         self._mouse_hook.install()
+
+        # Global low-level ESC hook. The capsule bar never takes activation
+        # focus (WA_ShowWithoutActivating + WS_EX_NOACTIVATE), so while only
+        # the bar is up the user's focus is still in another app and the Qt
+        # nativeEventFilter ESC above goes to that app instead. The LL hook
+        # sees ESC system-wide regardless of focus, so the bar collapses too.
+        self._esc_hook = GlobalEscapeHook()
+        self._esc_hook.on_escape = self._on_global_escape
+        self._esc_hook.install()
 
     def setup_ui(self):
         # No QHBoxLayout: every child is positioned manually by _layout_manual()
@@ -468,9 +478,18 @@ class CapsuleBar(QWidget):
         """
         self.hide_family_requested.emit()
 
+    def _on_global_escape(self):
+        """ESC caught system-wide by the low-level keyboard hook, including
+        when the capsule bar is up but the user's focus is in another app.
+        Mirrors the native ESC filter's guard before collapsing the family.
+        """
+        if FamilyWindowRegistry.any_visible() and not self._animating:
+            self.force_family_hide()
+
     def shutdown(self):
         """Release OS resources. Call from CapRise.exit_app before quit."""
         self._mouse_hook.uninstall()
+        self._esc_hook.uninstall()
         self.timer.shutdown()
 
     def event(self, event):
