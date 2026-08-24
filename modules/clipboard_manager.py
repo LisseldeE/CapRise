@@ -119,6 +119,12 @@ class ClipboardManager(QObject):
             del cfg._config["clipboard_room_code"]
             cfg.save()
 
+        # Always remember the stored room, regardless of whether the feature
+        # is currently enabled. Otherwise, after a restart with the feature
+        # disabled, _room_code stays empty and the next enable click would
+        # wrongly re-open the room dialog instead of reusing the saved room.
+        self._room_code = room if self._is_valid_room(room) else ""
+
         enabled = bool(cfg.get("clipboard_enabled", False))
         expanded = bool(cfg.get("clipboard_expanded", False))
         # The panel is no longer draggable and always positions next to the
@@ -207,6 +213,7 @@ class ClipboardManager(QObject):
         self._stop_network()
         self._room_code = room_code
         Config().set("clipboard_room", room_code)
+        self._panel.set_room(room_code)
         was_enabled = self._enabled
         self._enabled = True
         self.capsule.set_clipboard_active(True)
@@ -223,6 +230,7 @@ class ClipboardManager(QObject):
         self._expanded = False
         self._stop_network()
         self._monitor.disable()
+        self._panel.set_room("")
         self.capsule.set_clipboard_active(False)
         if self._panel.isVisible():
             self._panel.hide_panel()

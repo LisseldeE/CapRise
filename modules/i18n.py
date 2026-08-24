@@ -101,8 +101,8 @@ TRANSLATIONS = {
         "search_et_failed": "文件搜索失败",
         # Timer feature
         "timer": "计时",
-        "timer_settings_title": "番茄钟 / 倒计时",
-        "timer_pomodoro": "番茄循环",
+        "timer_settings_title": "倒计时 / 番茄钟",
+        "timer_pomodoro": "番茄钟",
         "timer_countdown": "倒计时",
         "timer_focus": "专注",
         "timer_break": "休息",
@@ -245,7 +245,7 @@ TRANSLATIONS = {
         "search_et_failed": "File search failed",
         # Timer feature
         "timer": "Timer",
-        "timer_settings_title": "Pomodoro / Countdown",
+        "timer_settings_title": "Countdown / Pomodoro",
         "timer_pomodoro": "Pomodoro",
         "timer_countdown": "Countdown",
         "timer_focus": "Focus",

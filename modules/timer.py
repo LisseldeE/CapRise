@@ -83,24 +83,24 @@ class TimerManager(QObject):
         self._remaining = 0
         self._paused = False
         self._end_ts = 0.0
-        self._focus_min = 25
-        self._break_min = 5
-        self._duration_min = 25
+        self._focus_sec = 25 * 60
+        self._break_sec = 5 * 60
+        self._duration_sec = 25 * 60
         self._timer = QTimer(self)
         self._timer.setInterval(self.REFRESH_MS)
         self._timer.timeout.connect(self._on_tick)
 
     # ----- public API -----
 
-    def start(self, mode, focus_min=25, break_min=5, duration_min=25):
+    def start(self, mode, focus_sec=25 * 60, break_sec=5 * 60, duration_sec=25 * 60):
         self._mode = mode
-        self._focus_min = max(1, int(focus_min))
-        self._break_min = max(1, int(break_min))
-        self._duration_min = max(1, int(duration_min))
+        self._focus_sec = max(1, int(focus_sec))
+        self._break_sec = max(1, int(break_sec))
+        self._duration_sec = max(1, int(duration_sec))
         if mode == "countdown":
-            self._begin("countdown", self._duration_min * 60)
+            self._begin("countdown", self._duration_sec)
         else:
-            self._begin("focus", self._focus_min * 60)
+            self._begin("focus", self._focus_sec)
         self.state_changed.emit("running")
 
     def toggle_pause(self):
@@ -156,10 +156,10 @@ class TimerManager(QObject):
 
     def _phase_seconds(self, phase):
         if phase == "focus":
-            return self._focus_min * 60
+            return self._focus_sec
         if phase == "break":
-            return self._break_min * 60
-        return self._duration_min * 60
+            return self._break_sec
+        return self._duration_sec
 
     def phase(self):
         return self._phase
@@ -215,10 +215,10 @@ class TimerManager(QObject):
         else:
             if self._phase == "focus":
                 self.finished.emit("focus")
-                self._begin("break", self._break_min * 60)
+                self._begin("break", self._break_sec)
             else:
                 self.finished.emit("break")
-                self._begin("focus", self._focus_min * 60)
+                self._begin("focus", self._focus_sec)
 
 
 class _ClickableLabel(QLabel):
@@ -379,7 +379,8 @@ class WheelNumberPicker(QWidget):
     ROW = 30        # row height
     ROWS = 3        # visible rows (current + one above / one below)
 
-    def __init__(self, minimum, maximum, value=0, suffix="", parent=None):
+    def __init__(self, minimum, maximum, value=0, suffix="", width=None,
+                 parent=None):
         super().__init__(parent)
         self._min = int(minimum)
         self._max = max(self._min, int(maximum))
@@ -388,7 +389,8 @@ class WheelNumberPicker(QWidget):
         self._suffix = suffix
         self._drag_y = None
         self._drag_base = 0.0
-        self.setFixedSize(self.W, self.ROW * self.ROWS)
+        self._w = int(width) if width else self.W
+        self.setFixedSize(self._w, self.ROW * self.ROWS)
         self.setCursor(Qt.PointingHandCursor)
         self.setMouseTracking(True)
 
@@ -489,7 +491,7 @@ class WheelNumberPicker(QWidget):
         # Center highlight chip (fixed; the numbers scroll beneath it).
         mid = (self.ROWS - 1) // 2
         y_mid = mid * self.ROW + self.ROW / 2
-        chip = QRectF(0, mid * self.ROW + 2, self.W, self.ROW - 4)
+        chip = QRectF(0, mid * self.ROW + 2, self._w, self.ROW - 4)
         c = QColor(accent)
         c.setAlpha(70)
         p.setPen(Qt.NoPen)
@@ -515,7 +517,7 @@ class WheelNumberPicker(QWidget):
             col.setAlphaF(max(0.15, 1.0 - dist * 0.5))
             p.setFont(f)
             p.setPen(col)
-            p.drawText(QRectF(0, yc - self.ROW / 2, self.W, self.ROW),
+            p.drawText(QRectF(0, yc - self.ROW / 2, self._w, self.ROW),
                        Qt.AlignCenter, self._text(val))
         p.end()
 
@@ -535,7 +537,7 @@ class TimerDialog(QDialog):
         self.setWindowTitle(I18n.tr("timer_settings_title"))
         self.setWindowFlags(Qt.Dialog | Qt.WindowCloseButtonHint
                             | Qt.WindowStaysOnTopHint)
-        self.setFixedWidth(330)
+        self.setFixedWidth(400)
         self.setup_ui()
         self.load_values()
         self.center_on_screen()
@@ -546,49 +548,56 @@ class TimerDialog(QDialog):
         lay.setContentsMargins(24, 20, 24, 18)
         lay.setSpacing(16)
 
-        # Mode: segmented toggle between pomodoro and countdown.
+        # Mode: segmented toggle between countdown and pomodoro (countdown is
+        # listed first, with a small gap between the two halves).
         seg = QHBoxLayout()
-        seg.setSpacing(0)
-        self._btn_pomo = QPushButton(I18n.tr("timer_pomodoro"))
+        seg.setSpacing(8)
         self._btn_count = QPushButton(I18n.tr("timer_countdown"))
-        self._btn_pomo.setObjectName("seg")
+        self._btn_pomo = QPushButton(I18n.tr("timer_pomodoro"))
         self._btn_count.setObjectName("seg")
+        self._btn_pomo.setObjectName("seg")
         self._grp = QButtonGroup(self)
         self._grp.setExclusive(True)
-        self._grp.addButton(self._btn_pomo)
         self._grp.addButton(self._btn_count)
-        self._btn_pomo.setCheckable(True)
+        self._grp.addButton(self._btn_pomo)
         self._btn_count.setCheckable(True)
+        self._btn_pomo.setCheckable(True)
         self._btn_pomo.setChecked(True)
-        for b in (self._btn_pomo, self._btn_count):
+        for b in (self._btn_count, self._btn_pomo):
             b.setFixedHeight(30)
             b.setCursor(Qt.PointingHandCursor)
-        seg.addWidget(self._btn_pomo)
         seg.addWidget(self._btn_count)
+        seg.addWidget(self._btn_pomo)
         seg.addStretch()
         lay.addLayout(seg)
 
-        # Pomodoro durations.
-        self._focus_pick = WheelNumberPicker(1, 120, 25)
-        self._break_pick = WheelNumberPicker(1, 60, 5)
+        # Pomodoro durations: each phase is entered as HH:MM:SS using six
+        # wheel pickers (a ten- and a one-wheel per unit). Minutes/seconds
+        # rollers cap at 59 so any combination stays a valid clock value.
+        self._pico_focus, self._picks_focus = self._hms_row(
+            I18n.tr("timer_focus_min"), 25, 0, 0)
+        self._pico_break, self._picks_break = self._hms_row(
+            I18n.tr("timer_break_min"), 5, 0, 0)
         self._pomo_box = QWidget()
         pb = QVBoxLayout(self._pomo_box)
         pb.setContentsMargins(0, 0, 0, 0)
-        pb.setSpacing(12)
-        pb.addLayout(
-            self._picker_row(I18n.tr("timer_focus_min"), self._focus_pick))
-        pb.addLayout(
-            self._picker_row(I18n.tr("timer_break_min"), self._break_pick))
+        pb.setSpacing(14)
+        pb.addLayout(self._pico_focus)
+        pb.addLayout(self._pico_break)
         lay.addWidget(self._pomo_box)
 
-        # Countdown duration.
-        self._dur_pick = WheelNumberPicker(1, 600, 25)
+        # Countdown duration. Its content is vertically centered (stretches
+        # above/below) so it reuses the pomodoro view's taller height without
+        # hugging the top once the dialog height is locked.
+        self._pico_dur, self._picks_dur = self._hms_row(
+            I18n.tr("timer_duration_min"), 25, 0, 0)
         self._count_box = QWidget()
         cb = QVBoxLayout(self._count_box)
         cb.setContentsMargins(0, 0, 0, 0)
-        cb.setSpacing(12)
-        cb.addLayout(
-            self._picker_row(I18n.tr("timer_duration_min"), self._dur_pick))
+        cb.setSpacing(14)
+        cb.addStretch()
+        cb.addLayout(self._pico_dur)
+        cb.addStretch()
         lay.addWidget(self._count_box)
 
         # Actions.
@@ -609,35 +618,86 @@ class TimerDialog(QDialog):
         self._btn_cancel.clicked.connect(self.reject)
         self._btn_start.clicked.connect(self._on_start)
         self._update_mode_fields()
+        # Lock a single dialog height. The pomodoro view (two rows) is the
+        # tallest, so once the countdown box is hidden its sizeHint gives the
+        # required height; fixing it here keeps the window size stable when
+        # switching modes (the countdown row is vertically centered to fit).
+        self.setFixedHeight(self.layout().sizeHint().height())
 
-    def _picker_row(self, text, picker):
-        row = QHBoxLayout()
-        row.setSpacing(12)
+    def _hms_row(self, text, ph, pm, ps):
+        """A labelled block: a caption above six wheel pickers grouped as
+        HH:MM:SS (a ten- and a one-wheel per unit), e.g. [0][0]:[2][5]:[0][0].
+
+        Returns (block_layout, pickers) where pickers is
+        (ten_h, one_h, ten_m, one_m, ten_s, one_s). The hour rollers span
+        00-99; the minute and second rollers span 00-59, so no wheel combo
+        can produce an invalid clock value."""
+        block = QVBoxLayout()
+        block.setSpacing(6)
         label = QLabel(text)
-        label.setFixedWidth(70)
-        unit = QLabel(I18n.tr("timer_minute"))
-        row.addWidget(label)
-        row.addStretch()
-        row.addWidget(picker)
-        row.addWidget(unit)
-        return row
+        block.addWidget(label)
+
+        box = QHBoxLayout()
+        box.setSpacing(2)
+        picks = []
+        units = ((ph, 9, 9), (pm, 5, 9), (ps, 5, 9))  # value, ten-max, one-max
+        for i, (val, ten_max, one_max) in enumerate(units):
+            if i:
+                colon = QLabel(":")
+                cf = QFont()
+                cf.setPointSize(14)
+                cf.setBold(True)
+                colon.setFont(cf)
+                colon.setAlignment(Qt.AlignCenter)
+                box.addWidget(colon)
+            ten = WheelNumberPicker(0, ten_max, val // 10, width=48)
+            one = WheelNumberPicker(0, one_max, val % 10, width=48)
+            picks.extend((ten, one))
+            box.addWidget(ten)
+            box.addWidget(one)
+        box.addStretch()
+        block.addLayout(box)
+        return block, picks
+
+    @staticmethod
+    def _hms_seconds(picks):
+        """Combine the six pickers (ten_h, one_h, ...) into total seconds."""
+        ten_h, one_h, ten_m, one_m, ten_s, one_s = picks
+        hh = ten_h.value() * 10 + one_h.value()
+        mm = ten_m.value() * 10 + one_m.value()
+        ss = ten_s.value() * 10 + one_s.value()
+        return hh * 3600 + mm * 60 + ss
+
+    @staticmethod
+    def _set_hms_values(picks, seconds, animate=False):
+        """Load a total-seconds value into the six pickers as HH:MM:SS."""
+        seconds = max(0, int(seconds))
+        hh, rem = divmod(seconds, 3600)
+        mm, ss = divmod(rem, 60)
+        ten_h, one_h, ten_m, one_m, ten_s, one_s = picks
+        for pick, v in ((ten_h, hh // 10), (one_h, hh % 10),
+                        (ten_m, mm // 10), (one_m, mm % 10),
+                        (ten_s, ss // 10), (one_s, ss % 10)):
+            pick.setValue(v, animate)
 
     def _update_mode_fields(self, *_):
         pomo = self._btn_pomo.isChecked()
         self._pomo_box.setVisible(pomo)
         self._count_box.setVisible(not pomo)
+        # No resize here: the dialog height is fixed at construction to the
+        # pomodoro (tallest) view, so toggling modes never moves the window.
 
     def load_values(self):
         c = Config()
         mode = c.get("timer_mode", "pomodoro")
         self._btn_pomo.setChecked(mode != "countdown")
         self._btn_count.setChecked(mode == "countdown")
-        self._focus_pick.setValue(int(c.get("timer_focus_min", 25)),
-                                  animate=False)
-        self._break_pick.setValue(int(c.get("timer_break_min", 5)),
-                                  animate=False)
-        self._dur_pick.setValue(int(c.get("timer_duration_min", 25)),
-                                animate=False)
+        self._set_hms_values(self._picks_focus,
+                             int(c.get("timer_focus_sec", 25 * 60)))
+        self._set_hms_values(self._picks_break,
+                             int(c.get("timer_break_sec", 5 * 60)))
+        self._set_hms_values(self._picks_dur,
+                             int(c.get("timer_duration_sec", 25 * 60)))
         # Programmatic setChecked above doesn't emit buttonClicked, so sync the
         # visible fields with the loaded mode explicitly.
         self._update_mode_fields()
@@ -645,17 +705,17 @@ class TimerDialog(QDialog):
     def _on_start(self):
         c = Config()
         if self._btn_pomo.isChecked():
-            focus = self._focus_pick.value()
-            break_ = self._break_pick.value()
+            focus = self._hms_seconds(self._picks_focus)
+            break_ = self._hms_seconds(self._picks_break)
             c.set("timer_mode", "pomodoro")
-            c.set("timer_focus_min", focus)
-            c.set("timer_break_min", break_)
-            self._manager.start("pomodoro", focus_min=focus, break_min=break_)
+            c.set("timer_focus_sec", focus)
+            c.set("timer_break_sec", break_)
+            self._manager.start("pomodoro", focus_sec=focus, break_sec=break_)
         else:
-            duration = self._dur_pick.value()
+            duration = self._hms_seconds(self._picks_dur)
             c.set("timer_mode", "countdown")
-            c.set("timer_duration_min", duration)
-            self._manager.start("countdown", duration_min=duration)
+            c.set("timer_duration_sec", duration)
+            self._manager.start("countdown", duration_sec=duration)
         self.accept()
 
     def _QSS(self):

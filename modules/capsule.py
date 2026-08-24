@@ -140,7 +140,8 @@ class CapsuleBar(QWidget):
         }
         order = Config().get(
             "tool_order",
-            ["screenshot", "annotation", "translate", "clipboard", "search"])
+            ["screenshot", "annotation", "translate", "clipboard", "search",
+             "timer"])
 
         # All capsule icons must keep their original colour on hover (task 1):
         # only the translucent plate animates, never a colour tint on the SVG.
@@ -260,7 +261,10 @@ class CapsuleBar(QWidget):
         if phase == "countdown":
             self._timer_notice = TimerNoticeOverlay(I18n.tr(key))
             self._timer_notice.show()
-            QTimer.singleShot(2700, self._retract_timer_strip)
+            # Collapse the strip right away (the countdown has ended); the
+            # notice pops independently, so there's no need to hold the strip
+            # open while the card is showing.
+            self._retract_timer_strip()
 
     def _retract_timer_strip(self):
         # If a new timer was started meanwhile, keep the strip up.

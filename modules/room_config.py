@@ -163,6 +163,9 @@ class RoomConfigDialog(QDialog):
         self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
         self.setModal(True)
         self.setFixedSize(360, 220)
+        # Whether a room was pre-filled (existing room -> focus the last
+        # digit on show; new room -> focus the first empty cell).
+        self._room_prefilled = bool(initial_code)
         self._init_ui(initial_code)
 
     def _init_ui(self, initial_code):
@@ -212,17 +215,13 @@ class RoomConfigDialog(QDialog):
         btn_row.addWidget(self.btn_confirm)
         layout.addLayout(btn_row)
 
-        self.input.code_changed.connect(self._on_changed)
+        self.input.code_changed.connect(
+            lambda: self.btn_confirm.setEnabled(self.input.is_complete())
+        )
         self.input.code_completed.connect(lambda: self.btn_confirm.setFocus())
         # Pre-fill complete -> enable
         if self.input.is_complete():
             self.btn_confirm.setEnabled(True)
-
-        # Focus first empty cell
-        QTimer.singleShot(80, self.input.set_focus)
-
-    def _on_changed(self):
-        self.btn_confirm.setEnabled(self.input.is_complete())
 
     def _on_confirm(self):
         if not self.input.is_complete():
@@ -238,6 +237,23 @@ class RoomConfigDialog(QDialog):
         super().showEvent(event)
         FamilyWindowRegistry.add(self)
         FamilyWindowRegistry.refresh_hwnd(self)
+        # Grab keyboard focus so the user can type the code immediately
+        # without a mouse click. The delayed call lets the modal dialog
+        # finish hoisting to the foreground before activating.
+        self.raise_()
+        QTimer.singleShot(80, self._grab_focus)
+
+    def _grab_focus(self):
+        if not self.isVisible() or not self.isEnabled():
+            return
+        self.activateWindow()
+        # Editing an existing room -> place the caret on the last digit so
+        # the user can adjust the tail immediately; entering a new room ->
+        # focus the first empty cell.
+        if self._room_prefilled and self.input.is_complete():
+            self.input.digit_edits[-1].setFocus()
+        else:
+            self.input.set_focus()
 
     def closeEvent(self, event):
         FamilyWindowRegistry.remove(self)

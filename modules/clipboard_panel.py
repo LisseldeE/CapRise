@@ -239,6 +239,16 @@ class PanelHeader(QWidget):
         )
         lay.addWidget(title)
 
+        # Current room code (hidden until a room is configured). Kept terse
+        # so it does not crowd the header's status area.
+        self.room_label = QLabel("")
+        self.room_label.setVisible(False)
+        self.room_label.setStyleSheet(
+            "color: #339af0; background: transparent; border: none;"
+            " font-size: 11px;"
+        )
+        lay.addWidget(self.room_label)
+
         self.status_label = QLabel(I18n.tr("clipboard_status_disconnected"))
         self.status_label.setStyleSheet(
             "color: palette(placeholder-text); background: transparent;"
@@ -278,6 +288,12 @@ class PanelHeader(QWidget):
 
     def set_status(self, text):
         self.status_label.setText(text)
+
+    def set_room(self, code):
+        code = (code or "").strip()
+        self.room_label.setVisible(bool(code))
+        if code:
+            self.room_label.setText(code)
 
 
 class ClipboardPanel(QWidget):
@@ -441,6 +457,9 @@ class ClipboardPanel(QWidget):
 
     def set_status(self, text, peer_count=0):
         self.header.set_status(text)
+
+    def set_room(self, code):
+        self.header.set_room(code)
 
     def _adjust_height(self, n):
         header_h = 40 + 24  # header + margins
