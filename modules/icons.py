@@ -136,6 +136,12 @@ ICON_PLAY = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill=
   <path d="M7 5l12 7-12 7z"/>
 </svg>"""
 
+ICON_PICKER = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="m2 22 1-1h3l9-9"/>
+  <path d="M3 21v-3l9-9"/>
+  <path d="m15 6 3.4-3.4a2.1 2.1 0 1 1 3 3L18 9l.4.4a2.1 2.1 0 1 1-3 3l-3.8-3.8a2.1 2.1 0 1 1 3-3l.4.4Z"/>
+</svg>"""
+
 
 def icon_svg(name):
     icons = {

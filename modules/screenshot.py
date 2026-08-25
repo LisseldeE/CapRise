@@ -28,6 +28,7 @@ class ScreenshotOverlay(BaseOverlay):
         self.end_point = None
         self.is_dragging = False
         super().__init__(parent)
+        self.setCursor(Qt.CrossCursor)  # precise crosshair while framing
         self.activateWindow()
         self.setFocus()  # Ensure ESC key works
 

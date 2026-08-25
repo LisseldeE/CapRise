@@ -8,6 +8,7 @@ import ctypes
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 from PySide6.QtGui import QIcon, QKeySequence
 from PySide6.QtCore import Qt
+from modules.single_instance import SingleInstance, poke_existing_instance
 from modules.config import Config
 from modules.i18n import I18n
 from modules.hotkey import HotkeyManager, HOTKEY_SPECS, qkeysequence_to_win
@@ -19,6 +20,7 @@ from modules.settings import SettingsDialog, apply_autostart
 from modules.clipboard_manager import ClipboardManager
 from modules.search import SearchWindow
 from modules.timer import TimerDialog
+from modules.color_picker import ColorPickerOverlay
 
 
 def set_app_user_model_id():
@@ -58,7 +60,7 @@ def load_app_icon():
 class CapRiseApp:
     """Main application managing tray, hotkey, capsule, and overlays"""
 
-    def __init__(self):
+    def __init__(self, app=None, guard=None):
         # Set the AppUserModelID before any window / QApplication exists so
         # the taskbar shows the CapRise icon. Mirrors icon_set.md.
         set_app_user_model_id()
@@ -83,7 +85,10 @@ class CapRiseApp:
             except Exception:
                 pass  # Never block startup on a config write failure.
 
-        self.app = QApplication(sys.argv)
+        if app is not None:
+            self.app = app
+        else:
+            self.app = QApplication(sys.argv)
         self.app.setQuitOnLastWindowClosed(False)
         self.app.setApplicationName("CapRise")
         self.app.setWindowIcon(load_app_icon())
@@ -109,9 +114,18 @@ class CapRiseApp:
         # Created before connect_signals so the button wiring can reference it.
         self.clipboard_mgr = ClipboardManager(self.capsule)
 
+        # A second launch asked this existing instance to surface the capsule.
+        if guard is not None:
+            guard.activated.connect(self._on_second_instance)
+
         self.setup_tray()
         self.setup_hotkey()
         self.connect_signals()
+
+    def _on_second_instance(self):
+        """Another instance started and yielded to us: bring the capsule to
+        the front so the user's second launch is not a no-op."""
+        self.toggle_capsule()
 
     def setup_tray(self):
         self.tray_icon = QSystemTrayIcon()
@@ -144,6 +158,7 @@ class CapRiseApp:
             "hotkey_clipboard": self.clipboard_mgr.on_button_left,
             "hotkey_search": self._on_search,
             "hotkey_settings": self._on_settings,
+            "hotkey_picker": self._on_picker,
         }
         self._hotkey_callbacks = {}
         for hotkey_id, cfg_key, _label, default_seq in HOTKEY_SPECS:
@@ -179,6 +194,8 @@ class CapRiseApp:
         self.capsule.hide_family_requested.connect(self._close_search)
         # Timer: open the pomodoro/countdown setup dialog.
         self.capsule.btn_timer.clicked.connect(self._on_timer)
+        # Color picker: enter eyedropper mode.
+        self.capsule.btn_color_picker.clicked.connect(self._on_picker)
 
     def toggle_capsule(self):
         if self.active_overlay is not None:
@@ -233,6 +250,14 @@ class CapRiseApp:
         # translated selection.
         self.clipboard_mgr.hide_family_immediately()
         overlay = TranslateOverlay()
+        self.active_overlay = overlay
+        overlay.closed.connect(lambda o=overlay: self._on_overlay_closed(o))
+
+    def _on_picker(self):
+        # Hide the capsule family so it neither wraps into the frozen desktop
+        # snapshot nor stays in the way while sampling.
+        self.clipboard_mgr.hide_family_immediately()
+        overlay = ColorPickerOverlay()
         self.active_overlay = overlay
         overlay.closed.connect(lambda o=overlay: self._on_overlay_closed(o))
 
@@ -332,5 +357,16 @@ class CapRiseApp:
 
 
 if __name__ == "__main__":
-    app = CapRiseApp()
-    sys.exit(app.run())
+    # Create QApplication first so the guard's sockets have a runnable
+    # object, then decide single-instance ownership BEFORE building the
+    # tray / hotkeys / clipboard listeners.
+    app = QApplication(sys.argv)
+    guard = SingleInstance()
+    if not guard.is_first_instance:
+        # A healthy instance is already running: surface its capsule and
+        # exit quietly. This avoids duplicate tray icons, failed hotkey
+        # registration, and conflicting clipboard / LAN-sync listeners.
+        poke_existing_instance()
+        sys.exit(0)
+    main = CapRiseApp(app=app, guard=guard)
+    sys.exit(main.run())

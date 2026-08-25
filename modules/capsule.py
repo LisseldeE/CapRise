@@ -3,15 +3,16 @@ from PySide6.QtWidgets import (
     QWidget, QGraphicsDropShadowEffect, QApplication
 )
 from PySide6.QtCore import (
-    Qt, QPoint, QRect, QPropertyAnimation, QEasingCurve, QEvent,
+    Qt, QPoint, QRect, QRectF, QPropertyAnimation, QEasingCurve, QEvent,
     QAbstractNativeEventFilter, Signal, QTimer, Property
 )
 from PySide6.QtGui import (
-    QPainter, QColor, QGuiApplication, QKeyEvent, QCursor, QRegion
+    QPainter, QColor, QGuiApplication, QKeyEvent, QCursor, QRegion,
+    QPainterPath
 )
 from modules.icons import (
     ICON_SCREENSHOT, ICON_ANNOTATION, ICON_TRANSLATE, ICON_SETTINGS,
-    ICON_CLOSE, ICON_CLIPBOARD, ICON_SEARCH, ICON_TIMER
+    ICON_CLOSE, ICON_CLIPBOARD, ICON_SEARCH, ICON_TIMER, ICON_PICKER
 )
 from modules.i18n import I18n
 from modules.family import FamilyWindowRegistry
@@ -147,11 +148,12 @@ class CapsuleBar(QWidget):
             "clipboard": (ICON_CLIPBOARD, "clipboard"),
             "search": (ICON_SEARCH, "search"),
             "timer": (ICON_TIMER, "timer"),
+            "picker": (ICON_PICKER, "color_picker"),
         }
         order = Config().get(
             "tool_order",
             ["screenshot", "annotation", "translate", "clipboard", "search",
-             "timer"])
+             "timer", "picker"])
 
         # All capsule icons must keep their original colour on hover (task 1):
         # only the translucent plate animates, never a colour tint on the SVG.
@@ -194,6 +196,7 @@ class CapsuleBar(QWidget):
         self.btn_clipboard = self._tool_buttons["clipboard"]
         self.btn_search = self._tool_buttons["search"]
         self.btn_timer = self._tool_buttons["timer"]
+        self.btn_color_picker = self._tool_buttons["picker"]
 
         # Full ordered toolbar: tool buttons in user order + settings + close.
         self._toolbar = [self._tool_buttons[k] for k in self._tool_order] \
@@ -339,6 +342,18 @@ class CapsuleBar(QWidget):
         self._timer_width_anim.setDuration(300)
         self._timer_width_anim.setEasingCurve(QEasingCurve.OutCubic)
 
+        # Left-right "Dynamic-island" show/hide (alt. to the vertical fly-in).
+        # The window stays parked at its final top-centred position while a
+        # 0..1 extent drives a rounded mask that grows symmetrically out from
+        # a small centre pill to the full width, so the glass plate "expands"
+        # out to both sides; opacity fades in along the curve. See
+        # _anim_mode() for how it is chosen vs. the vertical animation.
+        self._dynamic_expand = 0.0
+        self._expand_anim = QPropertyAnimation(self, b"dynamicExpand")
+        self._expand_anim.setDuration(300)
+        self._expand_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._expand_anim.finished.connect(self._on_anim_finished)
+
     # ----- timer strip expand / collapse -----
 
     def _get_timer_extent(self):
@@ -428,6 +443,73 @@ class CapsuleBar(QWidget):
         self._timer_width_anim.setEndValue(float(target))
         self._timer_width_anim.start()
 
+    # ----- show/hide animation mode -----
+
+    def _anim_mode(self):
+        """'vertical' flies the bar in from the top; 'dynamic' expands it
+        left-right from a centre point like a Dynamic Island."""
+        return Config().get("capsule_anim", "vertical")
+
+    # ----- left-right (dynamic) expand / collapse -----
+
+    def _get_dynamic_expand(self):
+        return self._dynamic_expand
+
+    def _set_dynamic_expand(self, p):
+        self._dynamic_expand = float(p)
+        self._apply_dynamic_mask(self._dynamic_expand)
+
+    dynamicExpand = Property(float, _get_dynamic_expand, _set_dynamic_expand)
+
+    def _apply_dynamic_mask(self, p):
+        """Clip the parked window to a centre-anchored pill that grows with p.
+
+        The glass plate is masked into an expanding rounded pill, while each
+        tool button fades in by the fraction of itself inside the pill, so
+        buttons glide in smoothly from the centre out to both sides instead
+        of popping at the mask edge (Dynamic-island style)."""
+        p = max(0.0, min(1.0, p))
+        w = self.width()
+        h = self.height()
+        cx = w / 2.0
+        if p >= 0.999:
+            self.clearMask()
+            self.setWindowOpacity(1.0)
+            self._set_buttons_reveal(1.0)
+            return
+        min_w = min(int(round(w * 0.25)), 96)
+        reveal = int(round(min_w + (w - min_w) * p))
+        reveal = max(1, min(reveal, w))
+        x = (w - reveal) // 2
+        # QRegion() does not accept a QPainterPath on all PySide6 builds, so
+        # rasterise the rounded pill to a polygon (the region API wants a
+        # QPolygon or Sequence[QPoint]).
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(x, 0, reveal, h), 28, 28)
+        self.setMask(QRegion(path.toFillPolygon().toPolygon()))
+        # Fade each button in by the fraction of itself inside the pill, so
+        # buttons enters smoothly instead of popping at the mask edge.
+        pill_l = cx - reveal / 2.0
+        pill_r = cx + reveal / 2.0
+        for b in self._toolbar:
+            bl = b.x()
+            br = bl + self.BTN
+            overlap = (min(br, pill_r) - max(bl, pill_l)) / float(self.BTN)
+            overlap = max(0.0, min(1.0, overlap))
+            o = overlap * overlap * (3 - 2 * overlap)  # smoothstep
+            b.set_reveal(o)
+
+    def _set_buttons_reveal(self, o):
+        for b in self._toolbar:
+            b.set_reveal(float(o))
+
+    def _reset_buttons_hover(self):
+        """Force every tool button back to its idle state. Used when the bar
+        is collapsed so no hover highlight survives a hide/show cycle."""
+        for b in self._toolbar:
+            b.clear_hover()
+            b.set_reveal(1.0)
+
     def paintEvent(self, event):
         # Shared pill look (gradient body + family hairline) so the capsule
         # and the annotation sub-bar read as one design family.
@@ -504,6 +586,15 @@ class CapsuleBar(QWidget):
     def hideEvent(self, event):
         self.pos_anim.stop()
         self.opacity_anim.stop()
+        self._expand_anim.stop()
+        self._dynamic_expand = 0.0
+        self.clearMask()
+        self.setWindowOpacity(1.0)
+        self._set_buttons_reveal(1.0)
+        # Hiding never delivers a leaveEvent, so a hovered button keeps its
+        # lit `_t`; clear it here so the highlight can't linger on re-show.
+        for b in self._toolbar:
+            b.clear_hover()
         self._animating = False
         self._pending_hide = False
         super().hideEvent(event)
@@ -535,6 +626,26 @@ class CapsuleBar(QWidget):
         screen = self._get_screen_geo()
         target_x = (screen.width() - self.width()) // 2 + screen.x()
         target_y = screen.y() + 30
+
+        # Dynamic (left-right) mode parks the window at its final geometry and
+        # grows a centre-anchored mask out to both sides. Reverses cleanly
+        # from wherever a previous hide animation currently is. Opacity is kept
+        # at 1.0 for the reveal (pure expand), but a parallel fade is used on
+        # hide so no clipped content lingers at the final frame.
+        if self._anim_mode() == "dynamic":
+            self.pos_anim.stop()
+            self.opacity_anim.stop()
+            self.setWindowOpacity(1.0)
+            if first_show:
+                self._apply_dynamic_mask(0.0)
+                self.move(int(target_x), int(target_y))
+                self.show()
+                self.raise_()
+            self._expand_anim.stop()
+            self._expand_anim.setStartValue(self._dynamic_expand)
+            self._expand_anim.setEndValue(1.0)
+            self._expand_anim.start()
+            return
 
         if first_show:
             # Boot from off-screen at zero opacity.
@@ -568,8 +679,26 @@ class CapsuleBar(QWidget):
 
         self._animating = True
         self._pending_hide = True
-        current_pos = self.pos()
+        # Collapse is the natural reset point: force every button back to its
+        # idle state so a hovered highlight can't survive into the next show.
+        self._reset_buttons_hover()
 
+        # Dynamic mode: close the centre-anchored mask back to a pill while fading
+        # out in parallel, so no clipped content is left visible at the final
+        # frame before the window hides.
+        if self._anim_mode() == "dynamic":
+            self.pos_anim.stop()
+            self._expand_anim.stop()
+            self._expand_anim.setStartValue(self._dynamic_expand)
+            self._expand_anim.setEndValue(0.0)
+            self._expand_anim.start()
+            self.opacity_anim.stop()
+            self.opacity_anim.setStartValue(self.windowOpacity())
+            self.opacity_anim.setEndValue(0.0)
+            self.opacity_anim.start()
+            return
+
+        current_pos = self.pos()
         self.pos_anim.stop()
         self.opacity_anim.stop()
         self.pos_anim.setStartValue(current_pos)

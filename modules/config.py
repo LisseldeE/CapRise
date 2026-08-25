@@ -7,7 +7,7 @@ class Config:
 
     # --- App info (used by the About page / check-for-update) ---
     APP_NAME = "CapRise"
-    APP_VERSION = "1.1.4.0"
+    APP_VERSION = "1.1.5.0"
     APP_AUTHOR = "Lisselde_E"
     APP_AUTHOR_LINK = "https://lisseldee.github.io/#7"  # 项目主页链接
 

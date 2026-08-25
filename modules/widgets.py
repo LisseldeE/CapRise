@@ -131,6 +131,7 @@ class GlassIconButton(QPushButton):
         self._is_pressed = False
         self._active = False
         self._t = 0.0  # interaction intensity: 0 = idle, 1 = fully lit
+        self._reveal = 1.0  # content opacity used by the capsule's dynamic reveal
 
         self.setFixedSize(size, size)
         self.setCursor(Qt.PointingHandCursor)
@@ -203,6 +204,32 @@ class GlassIconButton(QPushButton):
             self._t = 1.0 if self.underMouse() else 0.0
         self._apply_visuals()
 
+    def clear_hover(self):
+        """Drop any in-flight hover highlight so it can't linger across a
+        hide/show cycle.
+
+        Called by the capsule when the bar is hidden while the pointer is
+        still over a button — hiding never delivers a leaveEvent, so without
+        this the hover `_t` stays lit and shows a stale highlight plate the
+        next time the bar reappears."""
+        if self._active:
+            return  # toggles keep their persistent lit plate on purpose
+        self._anim.stop()
+        self._t = 0.0
+        self._apply_visuals()
+
+    def set_reveal(self, o):
+        """Content opacity (0..1) for the capsule's dynamic reveal.
+
+        A paint-level multiplier used instead of setWindowOpacity, which is
+        unreliable on child widgets and can leave translucent native state
+        behind. Pure painting — resets cleanly and never lingers."""
+        o = max(0.0, min(1.0, float(o)))
+        if o == self._reveal:
+            return
+        self._reveal = o
+        self.update()
+
     def set_svg(self, svg_content):
         """Swap the icon glyph (e.g. pause -> play) and drop the cached pixmaps."""
         self._svg = svg_content
@@ -222,6 +249,7 @@ class GlassIconButton(QPushButton):
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
+        p.setOpacity(self._reveal)
         rect = self.rect()
         alpha = self._alpha
         # Background plate: a translucent "glass chip" that fades in with the

@@ -107,6 +107,9 @@ TRANSLATIONS = {
         "search_et_failed": "文件搜索失败",
         # Timer feature
         "timer": "计时",
+        "color_picker": "取色",
+        "copied": "✓ 已复制",
+        "picker_hint": "点击屏幕取色 · 右键 / ESC 退出",
         "timer_settings_title": "倒计时 / 番茄钟",
         "timer_pomodoro": "番茄钟",
         "timer_countdown": "倒计时",
@@ -136,6 +139,11 @@ TRANSLATIONS = {
         "settings_translate": "翻译",
         "settings_system": "系统",
         "settings_about": "关于",
+        # Capsule animation
+        "capsule_animation": "胶囊栏动画",
+        "animation_vertical": "上下飞入",
+        "animation_dynamic": "左右展开",
+        "animation_preview_hint": "点击选项切换动画效果，修改后立即生效",
         # About / check for update
         "ok": "确定",
         "about_version_label": "版本",
@@ -257,6 +265,9 @@ TRANSLATIONS = {
         "search_et_failed": "File search failed",
         # Timer feature
         "timer": "Timer",
+        "color_picker": "Color Picker",
+        "copied": "✓ Copied",
+        "picker_hint": "Click a pixel to sample · Right-click / ESC to exit",
         "timer_settings_title": "Countdown / Pomodoro",
         "timer_pomodoro": "Pomodoro",
         "timer_countdown": "Countdown",
@@ -286,6 +297,11 @@ TRANSLATIONS = {
         "settings_translate": "Translate",
         "settings_system": "System",
         "settings_about": "About",
+        # Capsule animation
+        "capsule_animation": "Capsule Animation",
+        "animation_vertical": "Vertical Fly-in",
+        "animation_dynamic": "Left-Right Expand",
+        "animation_preview_hint": "Click an option to switch the animation; takes effect immediately",
         # About / check for update
         "ok": "OK",
         "about_version_label": "Version",

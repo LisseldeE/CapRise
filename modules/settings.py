@@ -6,12 +6,13 @@ settings for the selected section (task 4). The About page also carries the
 check-for-update logic (task 5)."""
 import sys
 import os
+import time
 import winreg
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox,
     QListWidget, QListWidgetItem, QStackedWidget, QWidget, QFrame,
     QApplication, QGraphicsOpacityEffect, QAbstractItemView, QKeySequenceEdit,
-    QPushButton, QLineEdit
+    QPushButton, QLineEdit, QRadioButton
 )
 from PySide6.QtCore import (
     Qt, QSize, QByteArray, QRectF, QPropertyAnimation, QEasingCurve, Signal,
@@ -19,7 +20,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QGuiApplication, QPalette, QPixmap, QPainter, QColor, QDrag, QKeySequence,
-    QIcon
+    QIcon, QPen
 )
 from PySide6.QtSvg import QSvgRenderer
 from modules.config import Config
@@ -666,6 +667,69 @@ class _HotkeyEditDialog(QDialog):
         return None
 
 
+class _AnimPreviewWidget(QWidget):
+    """Small looping demo of the selected capsule show/hide animation.
+
+    Paints a mini glass pill that repeats the motion: 'vertical' flies it in
+    from the top, 'dynamic' expands it left-right from a centred start point
+    (Dynamic-island style). Driven by a plain timer so it keeps looping with
+    no animation-object lifecycle to manage."""
+    MIN_PILL = 30
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(50)
+        self._mode = "vertical"
+        self._t0 = 0.0
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self.update)
+        self._timer.start(16)
+
+    def set_mode(self, mode):
+        self._mode = mode
+        self._t0 = time.monotonic()
+        self.update()
+
+    def _cycle(self, elapsed):
+        """Eased 0..1 progress for one loop (reveal -> hold -> conceal)."""
+        t = elapsed % 1.6
+        if t < 0.7:
+            p = t / 0.7
+        elif t < 0.9:
+            p = 1.0
+        elif t < 1.5:
+            p = 1.0 - (t - 0.9) / 0.6
+        else:
+            p = 0.0
+        return 1.0 - pow(1.0 - max(0.0, min(1.0, p)), 3)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        cy = self.height() / 2.0
+        t = self._cycle(time.monotonic() - self._t0)
+
+        fg = QColor(_text_hex())
+        fill = QColor(fg)
+        fill.setAlpha(45)
+        border = QColor(fg)
+        border.setAlpha(80)
+
+        max_w = self.width() - 16
+        if self._mode == "dynamic":
+            w = self.MIN_PILL + (max_w - self.MIN_PILL) * t
+            rct = QRectF((self.width() - w) / 2.0, cy - 13, w, 26)
+        else:
+            w = max_w * 0.62
+            off = (1 - t) * (self.height() + 14)
+            rct = QRectF((self.width() - w) / 2.0, cy - 13 - off, w, 26)
+
+        p.setPen(QPen(border, 1))
+        p.setBrush(fill)
+        p.drawRoundedRect(rct, 13, 13)
+        p.end()
+
+
 class SettingsDialog(QDialog):
     """Settings dialog split into a left navigation sidebar and a right pane."""
 
@@ -676,7 +740,7 @@ class SettingsDialog(QDialog):
         self._hotkey_mgr = hotkey_mgr
         self._hotkey_warn_timer = None
         self.setWindowTitle(I18n.tr("settings_title"))
-        self.setFixedSize(540, 460)
+        self.setFixedSize(540, 580)
         self._page_anim = None
         self.setWindowFlags(
             Qt.Dialog | Qt.WindowCloseButtonHint | Qt.WindowStaysOnTopHint
@@ -709,6 +773,8 @@ class SettingsDialog(QDialog):
         self.tool_order_list.order_changed.connect(self._on_tool_order_changed)
         self.tool_order_list.visibility_changed.connect(
             self._on_tool_visibility_changed)
+        self.anim_vertical.toggled.connect(self._on_anim_changed)
+        self.anim_dynamic.toggled.connect(self._on_anim_changed)
 
     def _on_tool_order_changed(self, *_):
         """Drag reorder landed: persist the new order and refresh the capsule."""
@@ -727,6 +793,12 @@ class SettingsDialog(QDialog):
         Config().set("hidden_tools", hidden)
         if self._capsule is not None:
             self._capsule.set_tools_hidden(hidden)
+
+    def _on_anim_changed(self, *_):
+        """Radio toggle: persist the animation mode and sync the demo."""
+        mode = "dynamic" if self.anim_dynamic.isChecked() else "vertical"
+        Config().set("capsule_anim", mode)
+        self._anim_preview.set_mode(mode)
 
     def setup_ui(self):
         outer = QHBoxLayout(self)
@@ -791,6 +863,32 @@ class SettingsDialog(QDialog):
         self.lang_combo.setFixedWidth(180)
         layout.addLayout(self._row(I18n.tr("language"), self.lang_combo))
 
+        # --- capsule show/hide animation ---
+        anim_title = QLabel(I18n.tr("capsule_animation"))
+        anim_title.setStyleSheet(
+            "font-size: 13px; font-weight: 600; margin-top: 2px;")
+        layout.addWidget(anim_title)
+
+        anim_row = QHBoxLayout()
+        anim_row.setSpacing(14)
+        self.anim_vertical = QRadioButton(I18n.tr("animation_vertical"))
+        self.anim_dynamic = QRadioButton(I18n.tr("animation_dynamic"))
+        for rb in (self.anim_vertical, self.anim_dynamic):
+            rb.setCursor(Qt.PointingHandCursor)
+            rb.setStyleSheet("font-size: 13px;")
+        anim_row.addWidget(self.anim_vertical)
+        anim_row.addWidget(self.anim_dynamic)
+        anim_row.addStretch()
+        layout.addLayout(anim_row)
+
+        # Looping reference demo of the selected show/hide motion.
+        self._anim_preview = _AnimPreviewWidget()
+        layout.addWidget(self._anim_preview)
+        anim_hint = QLabel(I18n.tr("animation_preview_hint"))
+        anim_hint.setStyleSheet("font-size: 11px; color: #868e96;")
+        anim_hint.setWordWrap(True)
+        layout.addWidget(anim_hint)
+
         # --- tool order: drag to reorder the capsule buttons ---
         order_title = QLabel(I18n.tr("tool_order"))
         order_title.setStyleSheet("font-size: 13px; font-weight: 600;")
@@ -806,6 +904,7 @@ class SettingsDialog(QDialog):
             "clipboard": I18n.tr("clipboard"),
             "search": I18n.tr("search"),
             "timer": I18n.tr("timer"),
+            "picker": I18n.tr("color_picker"),
         }
         self.tool_order_list.set_tool_labels(tool_labels, grip_pix)
 
@@ -818,7 +917,7 @@ class SettingsDialog(QDialog):
         order = Config().get(
             "tool_order",
             ["screenshot", "annotation", "translate", "clipboard", "search",
-             "timer"])
+             "timer", "picker"])
         for key in order:
             if key not in tool_labels:
                 continue
@@ -1160,6 +1259,11 @@ class SettingsDialog(QDialog):
         index = self.translate_lang_combo.findData(translate_lang)
         if index >= 0:
             self.translate_lang_combo.setCurrentIndex(index)
+
+        anim = config.get("capsule_anim", "vertical")
+        self.anim_vertical.setChecked(anim != "dynamic")
+        self.anim_dynamic.setChecked(anim == "dynamic")
+        self._anim_preview.set_mode(anim)
 
     def _persist(self, *_):
         lang = self.lang_combo.currentData()
