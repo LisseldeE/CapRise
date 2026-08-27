@@ -1,4 +1,3 @@
-import math
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QTextEdit, QApplication, QGraphicsDropShadowEffect,
     QPushButton, QFrame
@@ -8,7 +7,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QPainter, QColor, QPen, QFont, QGuiApplication, QFontMetrics,
-    QPainterPath, QPalette, QBrush, QKeyEvent, QImage
+    QPainterPath, QPalette, QBrush, QKeyEvent
 )
 from modules.overlay import BaseOverlay, draw_snapshot
 from modules.icons import ICON_RECTANGLE, ICON_FREEFORM, ICON_TEXT, ICON_CLOSE
@@ -491,10 +490,9 @@ class AnnotationOverlay(BaseOverlay):
         self.text_editor = None  # active inline text editor
         self._text_edit_idx = None  # index of text annotation being edited, None for new
         self._drag_start = None  # start point of current drag (like screenshot approach)
-        # Per-annotation corner controls: delete (red X) + drag handle (grip).
+        # Per-annotation corner beans: delete (red) + move (white) dots.
         self._delete_rects = {}
         self._drag_rects = {}
-        self._glyph_cache = {}  # kind -> (pre-rendered QImage, ink_center_x, ink_center_y)
         self._drag_ann_idx = None  # annotation currently being moved
         self._drag_offset = None   # grab point offset from the annotation origin
         self._last_drag_pos = None
@@ -502,6 +500,11 @@ class AnnotationOverlay(BaseOverlay):
         self._pending_text_color = None  # colour captured when a text box is drawn
         self.activateWindow()
         self.setFocus()
+        # Hover tracking for the macOS-style corner beans (a faint pair that
+        # light up together — white for move, red for delete — when the
+        # cursor is over either of them).
+        self.setMouseTracking(True)
+        self._hover_ann = None   # (x, y, w, h) of the lit bean pair's annotation
         self.setup_toolbar()
 
     def setup_toolbar(self):
@@ -602,128 +605,87 @@ class AnnotationOverlay(BaseOverlay):
            [drag grip] [delete]. Both sit INSIDE the annotation's right edge
            so they never poke out beyond the content. If the corner is too
            close to the top edge, both controls drop below the annotation."""
-        btn_size = 18
+        btn_size = 11
         spacing = 4
         margin = 6
         y = top_right.y() - btn_size - margin
         if y < 0:
             y = annotation_rect.bottom() + margin
-        # Right-align: delete's right edge is inset by `margin` from the
-        # content's right edge; the drag grip sits to its left.
+        # Right-align: delete's right edge touches the content's right edge;
+        # the drag grip sits to its left.
         left_limit = annotation_rect.left() + margin
-        xd = max(int(top_right.x() - btn_size - margin), int(left_limit))
+        xd = max(int(top_right.x() - btn_size), int(left_limit))
         delete_rect = QRect(int(xd), int(y), btn_size, btn_size)
         xg = max(int(xd - btn_size - spacing), int(left_limit))
         drag_rect = QRect(int(xg), int(y), btn_size, btn_size)
         return drag_rect, delete_rect
 
     def _draw_handles(self, painter, top_right, annotation_rect):
-        """Draw a delete button (glass circle + red X) and a drag handle
-        (glass circle + white grip dots) at the annotation's top-right corner.
-        Records both hit rects for mouse handling."""
+        """Draw two small rounded beans at the annotation's top-right corner,
+        macOS-traffic-light style. Both sit as a faint neutral grey pair; when
+        the cursor is over EITHER bean of the same annotation, both light up —
+        white for move (drag), red for delete. Records both hit rects."""
         drag_rect, delete_rect = self._handle_rects(top_right, annotation_rect)
-        ann_key = id(annotation_rect)
+        ann_key = (annotation_rect.x(), annotation_rect.y(),
+                   annotation_rect.width(), annotation_rect.height())
         self._delete_rects[ann_key] = delete_rect
         self._drag_rects[ann_key] = drag_rect
 
         painter.setRenderHint(QPainter.Antialiasing)
+        lit = self._hover_ann == ann_key
+        # While actively dragging an annotation, keep its bean pair lit even
+        # if the cursor drifts off the beans (the box follows the mouse).
+        if not lit and self._drag_ann_idx is not None:
+            idx = self._drag_ann_idx
+            if 0 <= idx < len(self.annotations):
+                dcorner = self._annotation_corner(self.annotations[idx])
+                if dcorner is not None:
+                    dr = dcorner[1]
+                    if (dr.x(), dr.y(), dr.width(), dr.height()) == ann_key:
+                        lit = True
+        self._beam_to(painter, drag_rect, QColor(255, 255, 255), lit)
+        self._beam_to(painter, delete_rect, QColor(255, 95, 87), lit)
 
-        # Common glass circle for both controls: dark translucent body with a
-        # thin light ring, so they read as pills over the dark capture.
-        def _glass(r):
-            painter.setPen(QPen(QColor(255, 255, 255, 70), 1))
-            painter.setBrush(QColor(28, 30, 34, 215))
-            painter.drawEllipse(r)
+    def _beam_to(self, painter, bean_rect, lit_color, lit):
+        """Paint a single corner bean: faint grey when idle, `lit_color` when
+        its annotation's bean pair is hovered. A soft thin ring keeps the bean
+        legible over the dark canvas."""
+        if lit:
+            fill = QColor(lit_color)
+            ring = QColor(255, 255, 255, 70)
+        else:
+            # Idle beans stay very faint so they barely cover the capture.
+            fill = QColor(255, 255, 255, 18)
+            ring = QColor(255, 255, 255, 55)
+        painter.setPen(QPen(ring, 1))
+        painter.setBrush(fill)
+        painter.drawEllipse(bean_rect)
 
-        # --- delete: glass circle + red X ---
-        _glass(delete_rect)
-        self._paint_glyph(painter, delete_rect, "delete")
+    def _update_handle_hover(self, pos):
+        """Track which annotation's bean pair the cursor is over; both beans
+        of that pair light together."""
+        hovered = None
+        for ann in self.annotations:
+            corner = self._annotation_corner(ann)
+            if corner is None:
+                continue
+            drag_rect, delete_rect = self._handle_rects(*corner)
+            # Union the two beans so moving between them (over the gap)
+            # keeps the pair lit instead of flickering.
+            if drag_rect.united(delete_rect).contains(pos):
+                r = corner[1]
+                hovered = (r.x(), r.y(), r.width(), r.height())
+                break
+        if hovered != self._hover_ann:
+            self._hover_ann = hovered
+            self.update()
 
-        # --- drag: glass circle + white four-point move arrow ---
-        _glass(drag_rect)
-        self._paint_glyph(painter, drag_rect, "move")
-
-    def _glyph(self, kind):
-        """Return (img, icx, icy) for the corner-control icon.
-
-        The icon is pre-rendered onto a small transparent image centred on
-        (10,10), then the ACTUAL ink bounding box is measured on the rendered
-        pixels. Returning the ink centre lets the caller blit it so the
-        displayed ink lands exactly on the button centre — absorbing any
-        backend/DPR rasterisation bias instead of trusting the maths.
-        """
-        cached = self._glyph_cache.get(kind)
-        if cached is not None:
-            return cached
-        size = 20  # logical icon size
-        dpr = QGuiApplication.primaryScreen().devicePixelRatio() or 1.0
-        px = int(round(size * dpr))  # physical buffer keeps the ink crisp
-        img = QImage(px, px, QImage.Format_ARGB32_Premultiplied)
-        img.fill(Qt.transparent)
-        img.setDevicePixelRatio(dpr)
-        p = QPainter(img)
-        p.setRenderHint(QPainter.Antialiasing)
-        cx = cy = size / 2.0  # 10,10 (logical — the painter scales by DPR)
-
-        if kind == "delete":
-            pen = QPen(QColor(255, 96, 96), 2)
-            pen.setCapStyle(Qt.RoundCap)
-            p.setPen(pen)
-            p.setBrush(Qt.NoBrush)
-            off = 3.5
-            p.drawLine(QPointF(cx - off, cy - off), QPointF(cx + off, cy + off))
-            p.drawLine(QPointF(cx - off, cy + off), QPointF(cx + off, cy - off))
-        else:  # move — four-point orthogonal move arrow
-            pen = QPen(QColor(255, 255, 255, 235), 2)
-            pen.setCapStyle(Qt.RoundCap)
-            p.setPen(pen)
-            p.setBrush(Qt.NoBrush)
-
-            def arrow(p1, p2):
-                dx, dy = p2.x() - p1.x(), p2.y() - p1.y()
-                length = math.hypot(dx, dy)
-                if length < 1e-6:
-                    return
-                ux, uy = dx / length, dy / length
-                bx, by = -ux, -uy
-                nx, ny = -by, bx
-                spread, h = 0.5, 1.4
-                p.drawLine(p1, p2)
-                p.drawLine(p2, QPointF(p2.x() + (bx + nx * spread) * h,
-                                       p2.y() + (by + ny * spread) * h))
-                p.drawLine(p2, QPointF(p2.x() + (bx - nx * spread) * h,
-                                       p2.y() + (by - ny * spread) * h))
-
-            e = 2.6
-            arrow(QPointF(cx, cy + e), QPointF(cx, cy - e))
-            arrow(QPointF(cx, cy - e), QPointF(cx, cy + e))
-            arrow(QPointF(cx + e, cy), QPointF(cx - e, cy))
-            arrow(QPointF(cx - e, cy), QPointF(cx + e, cy))
-        p.end()
-
-        # Measure where the ink actually landed (device pixels).
-        minx = miny = px
-        maxx = maxy = -1
-        for y in range(px):
-            for x in range(px):
-                if img.pixelColor(x, y).alpha() > 0:
-                    minx, maxx = min(minx, x), max(maxx, x)
-                    miny, maxy = min(miny, y), max(maxy, y)
-        icx = (minx + maxx) / 2.0
-        icy = (miny + maxy) / 2.0
-        result = (img, icx, icy)
-        self._glyph_cache[kind] = result
-        return result
-
-    def _paint_glyph(self, painter, button_rect, kind):
-        """Blit a corner-control icon so its ink centre sits on the button
-        centre — determined by measuring the rendered ink, not the maths."""
-        img, icx, icy = self._glyph(kind)
-        dpr = img.devicePixelRatio() or 1.0
-        c = button_rect.center()
-        # icx/icy are device pixels; drawImage takes logical coordinates, so
-        # scale the offset back down for crisp, centred HiDPI placement.
-        painter.drawImage(QPointF(c.x() - icx / dpr, c.y() - icy / dpr), img)
+    def leaveEvent(self, event):
+        # Moving out of the window clears any lit bean pair.
+        if self._hover_ann is not None:
+            self._hover_ann = None
+            self.update()
+        super().leaveEvent(event)
 
     def _get_delete_rects(self):
         result = {}
@@ -839,9 +801,12 @@ class AnnotationOverlay(BaseOverlay):
         super().mouseDoubleClickEvent(event)
 
     def mouseMoveEvent(self, event):
+        pos = event.position().toPoint()
+        # Keep the corner beans lit as they're hovered (before any early
+        # return below, so the state stays current while dragging too).
+        self._update_handle_hover(pos)
         # Dragging an existing annotation through its grip handle.
         if self._drag_ann_idx is not None and self._last_drag_pos is not None:
-            pos = event.position().toPoint()
             ann = self.annotations[self._drag_ann_idx]
             if ann[0] == "freeform":
                 delta = pos - self._last_drag_pos
@@ -875,6 +840,9 @@ class AnnotationOverlay(BaseOverlay):
             self._last_drag_pos = None
             self._drag_rects = {}
             self._delete_rects = {}
+            # Re-evaluate hover at the release point, otherwise the bean
+            # pair stays dark even though the cursor is still over it.
+            self._update_handle_hover(event.position().toPoint())
             self.update()
             return
 

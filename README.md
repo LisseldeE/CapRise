@@ -8,9 +8,26 @@
 
 </div>
 
+<p align="center">
+  <a href="https://github.com/LisseldeE/CapRise/releases"><img src="https://img.shields.io/github/v/release/LisseldeE/CapRise" alt="最新版本"></a>
+  <a href="https://github.com/LisseldeE/CapRise/releases"><img src="https://img.shields.io/github/release-date/LisseldeE/CapRise" alt="发布时间"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/LisseldeE/CapRise" alt="开源协议"></a>
+  <img src="https://img.shields.io/badge/platform-Windows-blue" alt="支持平台">
+</p>
+
 ## 项目简介
 
-CapRise 是一个基于 PySide6 的 Windows 桌面快捷工具栏。全局热键 <kbd>Ctrl</kbd> + <kbd>·</kbd> 唤起悬浮胶囊，截图、翻译、标注、局域网剪切板同步等日常办公所需，一触即达。
+CapRise 是一个基于 PySide6 的 Windows 桌面快捷工具栏。全局热键 <kbd>Ctrl</kbd> + <kbd>·</kbd> 唤起悬浮胶囊，截图、翻译、标注、局域网剪切板、全局搜索等日常办公所需，一触即达。
+
+## 功能一览
+
+- **截图**：任意方向框选截屏，实时预览，支持保存与复制
+- **标注**：矩形/自由/文字标注，框内保留原内容，支持拖动与删除
+- **翻译**：框选屏幕任意区域，OCR 识别并在线翻译为目标语言
+- **局域网剪切板**：同房间号设备间实时同步剪贴板文本
+- **全局搜索**：输入即搜，涵盖计算、已安装软件与全局文件
+- **计时器**：番茄钟或倒计时，剩余时间在悬浮胶囊同步显示
+- **取色器**：屏幕任意位置点击取色，一键复制颜色值
 
 ## 项目截图
 
@@ -22,6 +39,20 @@ CapRise 是一个基于 PySide6 的 Windows 桌面快捷工具栏。全局热键
 - **项目作者**: Lisselde_E
 - **项目主页**: https://lisseldee.github.io/#7
 - **项目仓库**: https://github.com/LisseldeE/CapRise
+
+## 下载
+
+<p align="center">
+  <a href="https://github.com/LisseldeE/CapRise/releases">
+    <img src="https://img.shields.io/badge/GitHub-Releases-181717?style=flat-square&logo=github&logoColor=white" alt="GitHub Releases">
+  </a>
+  &nbsp;&nbsp;
+  <a href="https://gitee.com/Lisselde_E/CapRise/releases">
+    <img src="https://img.shields.io/badge/Gitee-镜像下载-C71D23?style=flat-square&logo=gitee&logoColor=white" alt="Gitee 镜像下载">
+  </a>
+</p>
+
+> 💡 国内用户推荐使用 Gitee 镜像下载
 
 ## 使用方法
 
@@ -58,7 +89,7 @@ CapRise 是一个基于 PySide6 的 Windows 桌面快捷工具栏。全局热键
 - **矩形标注**：在截屏上绘制矩形框，框内保留原始内容（无遮罩），框外暗化突出重点
 - **自由形状**：自由绘制标注区域
 - **文字标注**：在截屏上添加文字说明
-- **可编辑标注**：标注可拖动调整位置、删除，控制按钮图标采用墨水重心精确居中显示
+- **可编辑标注**：标注可拖动调整位置、删除；控制按钮为框顶右侧的一对圆形豆——白色豆拖动、红色豆删除，悬浮到豆区两者一同亮起，未悬浮时近乎透明不遮挡画面
 - **固定底图**：框选内容与遮罩均取自同一帧桌面快照，避免底图实时刷新与框选内容割裂
 - **二级工具栏**：标注工具胶囊样式二级栏，支持关闭
 
@@ -103,29 +134,6 @@ CapRise 是一个基于 PySide6 的 Windows 桌面快捷工具栏。全局热键
 - **Socket（UDP + TCP）**：局域网剪切板发现与中继
 - **SQLite**：剪切板历史持久化
 - **Everything（es.exe）**：全局文件搜索的后端索引与检索引擎
-
-## 安装与运行
-
-### 系统要求
-- Windows 10 或更高版本（64位）
-- Python 3.10+
-- PySide6 6.x
-
-### 安装依赖
-
-```bash
-pip install -r requirements.txt
-```
-
-> 完整依赖见 `requirements.txt`，包含 PySide6 及翻译功能所需的 winrt 系列包。
->
-> 若不需要区域翻译功能，仅需 `pip install PySide6` 即可运行。
-
-### 运行程序
-
-```bash
-python CapRise.py
-```
 
 ## 项目结构
 

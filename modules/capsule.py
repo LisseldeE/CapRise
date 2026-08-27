@@ -262,18 +262,18 @@ class CapsuleBar(QWidget):
             self._collapse_timer_strip()
 
     def _on_timer_finished(self, phase):
-        """A phase completed: beep + transient notice in the strip. Pomodoro
-        auto-continues into the next phase; a plain countdown additionally
-        pops an independent notice card (visible even if the capsule is
-        hidden) and then retracts the strip."""
+        """A phase completed: beep + an independent notice card (visible even
+        if the capsule is hidden). Pomodoro auto-continues into the next
+        phase; the card auto-closes after a couple of seconds. The longer
+        phase messages (e.g. 专注结束，进入休息) don't fit the capsule strip,
+        so they pop as a standalone small capsule like the countdown one."""
         QApplication.beep()
         key = {"focus": "timer_finished_focus",
                "break": "timer_finished_break"}.get(
                    phase, "timer_finished_countdown")
-        self.timer_display.show_notice(I18n.tr(key))
+        self._timer_notice = TimerNoticeOverlay(I18n.tr(key))
+        self._timer_notice.show()
         if phase == "countdown":
-            self._timer_notice = TimerNoticeOverlay(I18n.tr(key))
-            self._timer_notice.show()
             # Collapse the strip right away (the countdown has ended); the
             # notice pops independently, so there's no need to hold the strip
             # open while the card is showing.

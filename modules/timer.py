@@ -23,7 +23,8 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QDialog,
-    QPushButton, QButtonGroup, QApplication, QStackedLayout
+    QPushButton, QButtonGroup, QApplication, QStackedLayout,
+    QGraphicsOpacityEffect
 )
 
 from modules.i18n import I18n
@@ -485,15 +486,16 @@ class WheelNumberPicker(QWidget):
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        accent = QApplication.palette().color(QPalette.Highlight)
         text = QApplication.palette().color(QPalette.WindowText)
 
         # Center highlight chip (fixed; the numbers scroll beneath it).
+        # A neutral light grey (instead of the accent blue) keeps the wheel
+        # from looking too garish under either theme.
         mid = (self.ROWS - 1) // 2
         y_mid = mid * self.ROW + self.ROW / 2
         chip = QRectF(0, mid * self.ROW + 2, self._w, self.ROW - 4)
-        c = QColor(accent)
-        c.setAlpha(70)
+        c = QColor(160, 160, 160)
+        c.setAlpha(80)
         p.setPen(Qt.NoPen)
         p.setBrush(c)
         p.drawRoundedRect(chip, 8, 8)
@@ -582,9 +584,10 @@ class TimerDialog(QDialog):
         pb = QVBoxLayout(self._pomo_box)
         pb.setContentsMargins(0, 0, 0, 0)
         pb.setSpacing(14)
+        pb.addStretch()
         pb.addLayout(self._pico_focus)
         pb.addLayout(self._pico_break)
-        lay.addWidget(self._pomo_box)
+        pb.addStretch()
 
         # Countdown duration. Its content is vertically centered (stretches
         # above/below) so it reuses the pomodoro view's taller height without
@@ -598,7 +601,14 @@ class TimerDialog(QDialog):
         cb.addStretch()
         cb.addLayout(self._pico_dur)
         cb.addStretch()
-        lay.addWidget(self._count_box)
+
+        # Both views share one stack rect (content vertically centered), so a
+        # mode switch cross-fades in place without the window jumping.
+        self._stack = QStackedLayout()
+        self._stack.addWidget(self._pomo_box)   # index 0: pomodoro
+        self._stack.addWidget(self._count_box)  # index 1: countdown
+        self._stack.setCurrentIndex(0)
+        lay.addLayout(self._stack)
 
         # Actions.
         btn_row = QHBoxLayout()
@@ -614,7 +624,8 @@ class TimerDialog(QDialog):
         btn_row.addWidget(self._btn_start)
         lay.addLayout(btn_row)
 
-        self._grp.buttonClicked.connect(self._update_mode_fields)
+        self._grp.buttonClicked.connect(
+            lambda _=None, a=1: self._switch_mode_view(animate=True))
         self._btn_cancel.clicked.connect(self.reject)
         self._btn_start.clicked.connect(self._on_start)
         self._update_mode_fields()
@@ -681,11 +692,28 @@ class TimerDialog(QDialog):
             pick.setValue(v, animate)
 
     def _update_mode_fields(self, *_):
-        pomo = self._btn_pomo.isChecked()
-        self._pomo_box.setVisible(pomo)
-        self._count_box.setVisible(not pomo)
-        # No resize here: the dialog height is fixed at construction to the
-        # pomodoro (tallest) view, so toggling modes never moves the window.
+        self._switch_mode_view(animate=False)
+
+    def _switch_mode_view(self, animate=True):
+        """Switch the stacked countdown/pomodoro view. When animate is True
+        (a button click), the incoming view fades in gently instead of
+        snapping, so toggling modes no longer looks jarring."""
+        idx = 0 if self._btn_pomo.isChecked() else 1
+        if self._stack.currentIndex() == idx:
+            return
+        self._stack.setCurrentIndex(idx)
+        if not animate:
+            return
+        w = self._stack.currentWidget()
+        eff = QGraphicsOpacityEffect(w)
+        w.setGraphicsEffect(eff)
+        anim = QPropertyAnimation(eff, b"opacity", self)
+        anim.setDuration(280)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+        anim.start(QPropertyAnimation.DeleteWhenStopped)
+        self._switch_anim = anim
 
     def load_values(self):
         c = Config()
@@ -767,9 +795,9 @@ class TimerNoticeOverlay(QWidget):
 
     Deliberately independent of the capsule: if the capsule was hidden while
     the timer ran, the user still sees the "finished" card. Rendered as a
-    small horizontal glass capsule — a line timer icon, the message and the
-    OK button all on a single row — that fades in and auto-closes after a
-    few seconds or on the button.
+    small horizontal glass capsule — a line timer icon and the message on a
+    single row — that fades in and auto-closes after a couple of seconds
+    with no interaction required.
     """
 
     H = 52  # pill height (rounded ends: radius = H / 2)
@@ -785,7 +813,7 @@ class TimerNoticeOverlay(QWidget):
         self.setFixedHeight(self.H)
 
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(18, 10, 12, 10)
+        lay.setContentsMargins(14, 10, 14, 10)
         lay.setSpacing(10)
 
         # Line-style timer icon echoing the capsule's icon language.
@@ -803,20 +831,6 @@ class TimerNoticeOverlay(QWidget):
         msg.setFont(mf)
         lay.addWidget(msg)
 
-        btn = QPushButton(I18n.tr("timer_ok"))
-        btn.setCursor(Qt.PointingHandCursor)
-        btn.setFixedSize(64, 28)
-        btn.setStyleSheet("""
-            QPushButton { border: none; border-radius: 14px;
-                          background: palette(highlight); color: white;
-                          font-weight: 600; }
-            QPushButton:hover { background: palette(highlight);
-                                border: 1px solid rgba(255, 255, 255, 150);
-                                border-radius: 13px; }
-        """)
-        btn.clicked.connect(self._close_soon)
-        lay.addWidget(btn)
-
         self._opacity_anim = QPropertyAnimation(self, b"windowOpacity")
         self._opacity_anim.setDuration(300)
         self._opacity_anim.setEasingCurve(QEasingCurve.OutCubic)
@@ -824,7 +838,7 @@ class TimerNoticeOverlay(QWidget):
 
         self._auto_close = QTimer(self)
         self._auto_close.setSingleShot(True)
-        self._auto_close.setInterval(5000)
+        self._auto_close.setInterval(2000)
         self._auto_close.timeout.connect(self._close_soon)
 
         # Fit the width to the content, then center it near the top of the
@@ -839,6 +853,8 @@ class TimerNoticeOverlay(QWidget):
         FamilyWindowRegistry.refresh_hwnd(self)
         FamilyWindowRegistry.set_no_activate(self)
         self._start_fade(0.0, 1.0)
+        # Kick off the auto-close timer so the pill fades out on its own.
+        self._auto_close.start()
 
     def _start_fade(self, start, end):
         self._opacity_anim.stop()

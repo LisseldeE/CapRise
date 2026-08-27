@@ -8,9 +8,26 @@
 
 </div>
 
+<p align="center">
+  <a href="https://github.com/LisseldeE/CapRise/releases"><img src="https://img.shields.io/github/v/release/LisseldeE/CapRise" alt="Latest Release"></a>
+  <a href="https://github.com/LisseldeE/CapRise/releases"><img src="https://img.shields.io/github/release-date/LisseldeE/CapRise" alt="Release Date"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/LisseldeE/CapRise" alt="License"></a>
+  <img src="https://img.shields.io/badge/platform-Windows-blue" alt="Supported Platform">
+</p>
+
 ## Project Introduction
 
-CapRise is a PySide6-based Windows desktop quick toolbar. Use the global hotkey <kbd>Ctrl</kbd> + <kbd>·</kbd> to summon a floating capsule, providing quick access to screenshot, translation, annotation, LAN clipboard sync, and other daily office tools at your fingertips.
+CapRise is a PySide6-based Windows desktop quick toolbar. Use the global hotkey <kbd>Ctrl</kbd> + <kbd>·</kbd> to summon a floating capsule, giving one-touch access to everyday office tools like screenshots, translation, annotation, LAN clipboard sync, and global search.
+
+## Features at a Glance
+
+- **Screenshot**: Select any screen region from any direction, preview instantly, and save or copy
+- **Annotation**: Rectangle/freeform/text annotation that keeps the boxed content intact, with drag and delete support
+- **Translate**: Select a screen region to OCR-recognize and translate text into the target language
+- **LAN Clipboard**: Real-time text clipboard sync across devices sharing the same room code
+- **Global Search**: Type to search and cover calculations, installed apps, and global files at once
+- **Timer**: Pomodoro or countdown, with the remaining time shown live in the floating capsule
+- **Color Picker**: Sample a color anywhere on screen by clicking, then copy the value with one click
 
 ## 项目截图
 
@@ -22,6 +39,20 @@ CapRise is a PySide6-based Windows desktop quick toolbar. Use the global hotkey 
 - **Project Author**: Lisselde_E
 - **Project Homepage**: https://lisseldee.github.io/#7
 - **Project Repository**: https://github.com/LisseldeE/CapRise
+
+## Download
+
+<p align="center">
+  <a href="https://github.com/LisseldeE/CapRise/releases">
+    <img src="https://img.shields.io/badge/GitHub-Releases-181717?style=flat-square&logo=github&logoColor=white" alt="GitHub Releases">
+  </a>
+  &nbsp;&nbsp;
+  <a href="https://gitee.com/Lisselde_E/CapRise/releases">
+    <img src="https://img.shields.io/badge/Gitee-Mirror-C71D23?style=flat-square&logo=gitee&logoColor=white" alt="Gitee Mirror">
+  </a>
+</p>
+
+> 💡 Users in China are recommended to use the Gitee mirror.
 
 ## Usage
 
@@ -58,7 +89,7 @@ CapRise is a PySide6-based Windows desktop quick toolbar. Use the global hotkey 
 - **Rectangle Annotation**: Draw rectangles on screenshots; the boxed region keeps the original content (no overlay) while the outside is dimmed to highlight it
 - **Freeform Annotation**: Freehand drawing for annotation areas
 - **Text Annotation**: Add text labels to screenshots
-- **Editable Annotations**: Drag to reposition or delete; control-button icons are precisely centered by their ink bounding box
+- **Editable Annotations**: Drag to reposition or delete; the controls are a pair of circular beans at the top-right — the white bean drags, the red bean deletes. Hovering the bean area lights both together, and idle beans stay near-transparent so they never obscure the captured content
 - **Fixed Snapshot Base**: The boxed content and the dimmed overlay come from one frozen desktop frame, so the background and selection never visually desync
 - **Secondary Toolbar**: Capsule-style secondary toolbar with close support
 
@@ -103,29 +134,6 @@ See [Changelog](https://github.com/LisseldeE/CapRise/blob/main/CHANGELOG.md)
 - **Socket (UDP + TCP)**: LAN clipboard discovery and relay
 - **SQLite**: Clipboard history persistence
 - **Everything (es.exe)**: Backend index & retrieval engine for global file search
-
-## Installation & Running
-
-### System Requirements
-- Windows 10 or later (64-bit)
-- Python 3.10+
-- PySide6 6.x
-
-### Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-> The full dependency list lives in `requirements.txt`, including PySide6 and the winrt packages required by the translate feature.
->
-> If you don't need the region-translate feature, `pip install PySide6` alone is enough.
-
-### Run the Application
-
-```bash
-python CapRise.py
-```
 
 ## Project Structure
 
