@@ -28,14 +28,18 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QApplication,
-    QGraphicsOpacityEffect, QScrollArea, QFrame
+    QGraphicsOpacityEffect, QGraphicsDropShadowEffect, QScrollArea, QFrame,
+    QMenu
 )
 from PySide6.QtSvg import QSvgRenderer
 
 from modules.overlay import BaseOverlay, pixel_source, draw_snapshot
 from modules.i18n import I18n
 from modules.config import Config
-from modules.icons import ICON_COPY, ICON_CHECK
+from modules.icons import (
+    ICON_COPY, ICON_CHECK, ICON_ARROW_RIGHT, ICON_X,
+)
+from modules.widgets import paint_pill, make_pixmap
 
 # Google free translation endpoints (no API key). Multiple hosts so a
 # transient network failure on one falls back to the other.
@@ -44,8 +48,48 @@ GOOGLE_URLS = [
     "https://translate.google.com/translate_a/single",
 ]
 
+# Microsoft Edge's built-in translation endpoint (Azure engine, no API key).
+# Like Google's free endpoint it is a web-implemented (unofficial) endpoint:
+# usable today but not an official SLA-backing API, so it is only a fallback.
+EDGE_URL = "https://edge.microsoft.com/translate/translatetext"
+
+# Edge (Azure) uses its own language codes, so map the config style codes.
+_EDGE_LANG = {
+    "zh-CN": "zh-Hans",
+    "zh-Hans": "zh-Hans",
+    "zh-CHS": "zh-Hans",
+    "zh-TW": "zh-Hant",
+    "zh-Hant": "zh-Hant",
+    "zh-CHT": "zh-Hant",
+    "en": "en",
+    "ja": "ja",
+    "ko": "ko",
+}
+
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0")
+
+# Source / target-language choices for the translation sub-capsule and
+# settings. Source is fixed to English — the OCR engine only recognises
+# English — so only the target language is selectable. Value = config code.
+_TARGET_LANGS = [
+    ("zh-CN", "简体中文"),
+    ("zh-TW", "繁體中文"),
+    ("en", "English"),
+    ("ja", "日本語"),
+    ("ko", "한국어"),
+]
+
+# Shared fixed width for the source and target language chips so the two
+# dropdown boxes line up at the same size.
+CHIP_W = 100
+
+# Source-language choices. Only English is offered: the built-in OCR engine
+# recognises English exclusively, so any other source would make the request
+# fail or be mis-tagged. Value = config code.
+_SOURCE_LANGS = [
+    ("en", "English"),
+]
 
 # Minimum delay between outgoing translation requests, shared across every
 # worker thread. Google's free endpoint rate-limits unauthenticated requests;
@@ -95,7 +139,23 @@ def _make_icon(svg_content, color, size=16):
 
 # ----- translation (pure functions, no Qt) -----
 
-def _google_translate(text, lang):
+def _google_source(source):
+    """Map a UI source-language code to Google's ``sl`` parameter. Google's
+    endpoint auto-detects, so ``auto`` is passed straight through."""
+    return "auto" if source in (None, "auto") else source
+
+
+def _edge_source(source):
+    """Map a UI source-language code to Edge's ``from`` parameter.
+
+    Edge's endpoint rejects ``from=auto`` (unlike Google), and the OCR
+    pipeline recognises en-US first, so ``auto`` falls back to English."""
+    if source in (None, "auto", "en"):
+        return "en"
+    return _EDGE_LANG.get(source, source)  # zh-CN->zh-Hans, zh-TW->zh-Hant, ...
+
+
+def _google_translate(text, lang, source="auto"):
     """Translate via Google's free endpoint. No API key needed.
 
     Retries across the known hosts because the endpoint is flaky on some
@@ -104,7 +164,8 @@ def _google_translate(text, lang):
     on HTTP 429 the code backs off exponentially (1s, 2s) before retrying
     instead of hammering the endpoint and risking an IP block."""
     params = urllib.parse.urlencode({
-        "client": "gtx", "sl": "auto", "tl": lang, "dt": "t", "q": text,
+        "client": "gtx", "sl": _google_source(source), "tl": lang,
+        "dt": "t", "q": text,
     })
     errors = []
     for attempt in range(2):  # two passes over the host list
@@ -129,9 +190,51 @@ def _google_translate(text, lang):
     raise RuntimeError("; ".join(errors[-3:]) or "google translate failed")
 
 
-def translate_text(text, lang):
-    """Translate text to the target language via Google's free endpoint."""
-    return _google_translate(text, lang)
+def _edge_translate(text, lang, source="auto"):
+    """Translate via Microsoft Edge's built-in endpoint (Azure engine).
+
+    Key-less, and returns the translation directly. The source language
+    defaults to English (the OCR pipeline recognises en-US first) because
+    Edge rejects ``from=auto``."""
+    edge_lang = _EDGE_LANG.get(lang, lang)
+    params = urllib.parse.urlencode({
+        "from": _edge_source(source), "to": edge_lang, "api-version": "3.0",
+    })
+    req = urllib.request.Request(
+        f"{EDGE_URL}?{params}",
+        data=json.dumps([text]).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": _UA,
+            "Origin": "https://www.microsoft.com",
+            "Referer": "https://www.microsoft.com/",
+        })
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    try:
+        return data[0]["translations"][0]["text"]
+    except (IndexError, KeyError, TypeError):
+        raise RuntimeError(f"unexpected edge response: {data!r}")
+
+
+# All supported translation providers, keyed by the value stored in config
+# 'translate_source'. The provider is chosen manually in settings, never
+# switched automatically, so request rate stays predictable and a blocked
+# source can't silently swap in a different service.
+_PROVIDERS = {
+    "google": _google_translate,
+    "edge": _edge_translate,
+}
+
+
+def translate_text(text, lang, source="auto", provider="google"):
+    """Translate ``text`` to ``lang`` using a single, manually chosen provider.
+
+    Only the selected provider is used. The shared throttle still spaces
+    requests so a burst never trips a rate limit (HTTP 429) and risks an IP
+    block."""
+    fn = _PROVIDERS.get(provider or "google", _google_translate)
+    return fn(text, lang, source)
 
 
 # ----- OCR (Windows built-in engine via the WinRT API directly) -----
@@ -311,10 +414,16 @@ class TranslateResultPanel(QWidget):
     retry). The card re-sizes to its content whenever the state changes; long
     translations scroll inside the card instead of stretching it."""
 
-    ICON_BTN = 26  # copy button size
-    ICON_SIZE = 18
+    ICON_BTN = 22  # copy / delete button size
+    ICON_SIZE = 16
     RADIUS = 12
     MAX_RESULT_H = 300  # cap on the result scroll area; longer text scrolls
+
+    @property
+    def _icon_band(self):
+        """Horizontal space the two floating corner buttons occupy (delete +
+        copy). Text is inset by this so it never runs under the buttons."""
+        return 2 * self.ICON_BTN + 4
 
     def __init__(self, overlay):
         super().__init__(overlay)
@@ -419,20 +528,6 @@ class TranslateResultPanel(QWidget):
         self.layout.setContentsMargins(14, 12, 14, 12)
         self.layout.setSpacing(8)
 
-        # Header: copy icon pinned to the top-right corner of the card.
-        self.copy_btn = QPushButton(self)
-        self.copy_btn.setFixedSize(self.ICON_BTN, self.ICON_BTN)
-        self.copy_btn.setCursor(Qt.PointingHandCursor)
-        self.copy_btn.setStyleSheet(self._icon_btn_style())
-        self.copy_btn.clicked.connect(self._on_copy)
-        self.copy_btn.hide()
-        self._set_copy_icon(ICON_COPY, I18n.tr("copy"))
-        header = QHBoxLayout()
-        header.setContentsMargins(0, 0, 0, 0)
-        header.addStretch()
-        header.addWidget(self.copy_btn)
-        self.layout.addLayout(header)
-
         # Loading: scanner centered + label below.
         load_box = QWidget(self)
         load_lay = QVBoxLayout(load_box)
@@ -490,11 +585,50 @@ class TranslateResultPanel(QWidget):
         retry_row.addWidget(self.retry_btn)
         self.layout.addLayout(retry_row)
 
+        # Floating corner buttons. They are NOT part of the layout — a plain
+        # header row would reserve a blank band above the text (the reported
+        # "big empty space at the top"). They sit absolutely at the top-right,
+        # added last so they paint above the scroll area.
+        self.delete_btn = QPushButton(self)
+        self.delete_btn.setFixedSize(self.ICON_BTN, self.ICON_BTN)
+        self.delete_btn.setCursor(Qt.PointingHandCursor)
+        self.delete_btn.setStyleSheet(self._icon_btn_style())
+        self.delete_btn.clicked.connect(self._on_delete)
+        self._set_delete_icon(0.9)
+        # A subtle tip helps discover this dedicated dismissal button.
+        self.delete_btn.setToolTip(I18n.tr("translate_remove"))
+
+        self.copy_btn = QPushButton(self)
+        self.copy_btn.setFixedSize(self.ICON_BTN, self.ICON_BTN)
+        self.copy_btn.setCursor(Qt.PointingHandCursor)
+        self.copy_btn.setStyleSheet(self._icon_btn_style())
+        self.copy_btn.clicked.connect(self._on_copy)
+        self.copy_btn.hide()
+        self._set_copy_icon(ICON_COPY, I18n.tr("copy"))
+
+    def _place_icons(self, w):
+        """Pin the delete + copy buttons to the card's top-right corner."""
+        m = self.layout.contentsMargins()
+        ix = w - m.right() - self.ICON_BTN
+        iy = m.top()
+        self.copy_btn.move(ix, iy)
+        self.delete_btn.move(ix - self.ICON_BTN - 4, iy)
+        self.copy_btn.raise_()
+        self.delete_btn.raise_()
+
     def _set_copy_icon(self, svg, tooltip):
         self.copy_btn.setToolTip(tooltip)
         color = self._text_color(QPalette.WindowText)
         self.copy_btn.setIcon(_make_icon(svg, color, self.ICON_SIZE))
         self.copy_btn.setIconSize(QSize(self.ICON_SIZE, self.ICON_SIZE))
+
+    def _set_delete_icon(self, ratio):
+        """Dimmed 'X' glyph like the copy button — no filled red disc — so it
+        sits unobtrusively in the card's top-right corner."""
+        color = self._text_color(QPalette.WindowText)
+        px = int(self.ICON_SIZE * ratio)
+        self.delete_btn.setIcon(_make_icon(ICON_X, color, px))
+        self.delete_btn.setIconSize(QSize(px, px))
 
     # ----- states -----
 
@@ -567,7 +701,9 @@ class TranslateResultPanel(QWidget):
         (QFontMetrics.boundingRect under-estimates wrapped CJK height), so the
         measured height exactly matches what the label renders."""
         m = self.layout.contentsMargins()
-        inner = width - m.left() - m.right()
+        # Inset by the floating corner buttons (delete + copy) so long text
+        # wraps before it would slide underneath them at the top-right.
+        inner = width - m.left() - m.right() - self._icon_band
         self.result_label.setFixedWidth(inner)
         rh = self.result_label.heightForWidth(inner)
         if rh <= 0:
@@ -605,32 +741,31 @@ class TranslateResultPanel(QWidget):
         spacing = self.layout.spacing()
 
         if self._state == "result":
-            # Leave room for the copy-icon header above the scrollable text.
-            # The scroll area is capped so a long translation scrolls inside a
-            # fixed-height card (with equal margins) instead of stretching it
-            # across the whole screen.
-            scroll_max = avail_h - m.top() - self.ICON_BTN - spacing - m.bottom()
+            # The old icon-header row is gone, so the scrolling text sits
+            # right below the top margin — no blank band. Only the vertical
+            # cap remains for very long translations.
+            scroll_max = avail_h - m.top() - m.bottom()
             scroll_max = min(scroll_max, self.MAX_RESULT_H)
             self._fit_result_scroll(w, scroll_max)
-            h = m.top() + self.ICON_BTN + spacing + self.result_scroll.height() + m.bottom()
+            h = m.top() + self.result_scroll.height() + m.bottom()
         elif self._state == "error":
+            # Inset by the floating corner buttons so the message never runs
+            # underneath the delete / copy circles.
+            inner = w - m.left() - m.right() - self._icon_band
+            self.error_label.setFixedWidth(inner)
             fm = QFontMetrics(self.error_label.font())
             rh = fm.boundingRect(
-                QRect(0, 0, w - m.left() - m.right(), 10000), Qt.TextWordWrap,
+                QRect(0, 0, inner, 10000), Qt.TextWordWrap,
                 self.error_label.text()).height()
-            # The (hidden) copy-header row still consumes one layout spacing
-            # above the message, so count two spacings total (header->message
-            # and message->retry). Otherwise the card comes up short and the
-            # retry button is squeezed below its content height, clipping the
-            # label text vertically.
-            h = (m.top() + spacing + rh + spacing
+            h = (m.top() + rh + spacing
                  + self.retry_btn.sizeHint().height() + m.bottom())
         else:  # loading
-            h = (m.top() + spacing + self.loading.height() + 6 + 18
+            h = (m.top() + self.loading.height() + 6 + 18
                  + m.bottom())
         h = min(h, avail_h)
 
         self.setFixedSize(w, h)
+        self._place_icons(w)
         x = sel.center().x() - w // 2
         x = max(left + 8, min(x, right - w - 8))
         y = sel.bottom() + 10
@@ -652,6 +787,15 @@ class TranslateResultPanel(QWidget):
         # Swallow clicks on the panel so they don't close the overlay.
         event.accept()
 
+    def _on_delete(self):
+        """Dismiss this translation frame (and its result) so the user can
+        immediately draw a fresh selection. The persistent sub-bar stays."""
+        overlay = self.parent()
+        try:
+            overlay._delete_result()
+        except RuntimeError:
+            pass
+
     def _on_copy(self):
         QApplication.clipboard().setText(self.result_label.text())
         self._set_copy_icon(ICON_CHECK, I18n.tr("copied"))
@@ -666,6 +810,258 @@ class TranslateResultPanel(QWidget):
     def _on_retry(self):
         self.show_state_loading()
         self.parent()._start_worker()
+
+
+# ----- translation sub-capsule -----
+
+class TranslateCapsule(QWidget):
+    """Persistent translation sub-bar: provider + target language.
+
+    Shown for the whole translation session — created once when the overlay
+    opens and kept visible like the annotation sub-bar. Source language is
+    fixed to English (EN) because the OCR engine only recognises English.
+
+    Styled like the annotation toolbar: the shared theme-aware paint_pill
+    (system palette gradient, no hard-coded background) plus a soft drop
+    shadow, so it reads as one design family. The dropdowns also take their
+    colours from the system palette, not fixed light-theme values."""
+
+    RADIUS = 16
+
+    def __init__(self, overlay):
+        super().__init__(overlay)
+        self._overlay = overlay
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(20)
+        shadow.setColor(QColor(0, 0, 0, 90))
+        shadow.setOffset(0, 4)
+        self.setGraphicsEffect(shadow)
+
+        bg_rgba, text_hex = self._chip_colors()
+        dim_hex = self._dim_color()
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(14, 8, 14, 8)
+        lay.setSpacing(8)
+
+        # Provider — leading field on its own.
+        self.provider_btn = self._make_chip(bg_rgba, text_hex)
+        self.provider_btn.setFixedWidth(88)
+        self.provider_btn.setToolTip(I18n.tr("translate_source_provider"))
+        provider_menu = QMenu(self)
+        provider_menu.setStyleSheet(self._menu_style())
+        for code, label in (
+            ("google", I18n.tr("translate_source_google")),
+            ("edge", I18n.tr("translate_source_edge")),
+        ):
+            act = provider_menu.addAction(label)
+            act.setData(code)
+        provider_menu.triggered.connect(
+            lambda a: self._pick_provider(a.data()))
+        self.provider_btn.setMenu(provider_menu)
+        self._set_provider_label(overlay._provider)
+        lay.addWidget(self._field(I18n.tr("translate_source_provider"),
+                                  self.provider_btn, dim_hex))
+
+        # A thin vertical divider separates provider from languages.
+        divider = QFrame(self)
+        divider.setFixedSize(1, 26)
+        divider.setStyleSheet("background: rgba(130,130,130,150);")
+        lay.addWidget(divider, 0, Qt.AlignVCenter)
+
+        # Source language — a dropdown that only offers English (EN), since
+        # the built-in OCR engine can only recognise English. Same width as
+        # the target chip so the two boxes line up.
+        self.source_btn = self._make_chip(bg_rgba, text_hex)
+        self.source_btn.setFixedWidth(CHIP_W)
+        self.source_btn.setToolTip(I18n.tr("translate_source_lang"))
+        source_menu = QMenu(self)
+        source_menu.setStyleSheet(self._menu_style())
+        for code, label in _SOURCE_LANGS:
+            act = source_menu.addAction(label)
+            act.setData(code)
+        source_menu.triggered.connect(
+            lambda a: self._pick_source(a.data()))
+        self.source_btn.setMenu(source_menu)
+        self._set_source_label()
+        lay.addWidget(self._field(I18n.tr("translate_source_lang"),
+                                  self.source_btn, dim_hex))
+
+        # Single-direction arrow from source -> target, vertically centered.
+        swap_label = QLabel(self)
+        swap_label.setPixmap(
+            make_pixmap(ICON_ARROW_RIGHT, self._dim_color(), 16))
+        swap_label.setAlignment(Qt.AlignCenter)
+        swap_box = QWidget(self)
+        sv = QVBoxLayout(swap_box)
+        sv.setContentsMargins(2, 0, 2, 0)
+        sv.addStretch()
+        sv.addWidget(swap_label)
+        sv.addStretch()
+        lay.addWidget(swap_box)
+
+        # Target language.
+        self.target_btn = self._make_chip(bg_rgba, text_hex)
+        self.target_btn.setFixedWidth(CHIP_W)
+        self.target_btn.setToolTip(I18n.tr("translate_target_lang"))
+        target_menu = QMenu(self)
+        target_menu.setStyleSheet(self._menu_style())
+        for code, label in _TARGET_LANGS:
+            act = target_menu.addAction(label)
+            act.setData(code)
+        target_menu.triggered.connect(
+            lambda a: self._pick_target(a.data()))
+        self.target_btn.setMenu(target_menu)
+        self._set_target_label(overlay._target_lang)
+        lay.addWidget(self._field(I18n.tr("translate_target_lang"),
+                                  self.target_btn, dim_hex))
+
+    def _set_provider_label(self, code):
+        """Put the current provider's display text on the chip."""
+        text = ("谷歌翻译" if code == "google"
+                else I18n.tr("translate_source_edge"))
+        self.provider_btn.setText(text)
+
+    def _set_source_label(self):
+        """The source chip only ever shows English (the OCR limitation)."""
+        for c, label in _SOURCE_LANGS:
+            if c == self._overlay._source:
+                self.source_btn.setText(label)
+                return
+        self.source_btn.setText("English")
+
+    def _pick_source(self, code):
+        """Single-choice picker: always English, but kept as a real dropdown
+        so the control stays uniform with the target chip."""
+        overlay = self._overlay
+        overlay._source = code
+        Config().set("translate_source_lang", code)
+        self._set_source_label()
+        self._on_changed()
+
+    def _set_target_label(self, code):
+        for c, label in _TARGET_LANGS:
+            if c == code:
+                self.target_btn.setText(label)
+                return
+
+    def _pick_provider(self, code):
+        """Store, persist and re-translate on provider change."""
+        overlay = self._overlay
+        overlay._provider = code
+        Config().set("translate_source", code)
+        self._set_provider_label(code)
+        self._on_changed()
+
+    def _pick_target(self, code):
+        """Store, persist and re-translate on target-language change."""
+        overlay = self._overlay
+        overlay._target_lang = code
+        Config().set("translate_target_lang", code)
+        self._set_target_label(code)
+        self._on_changed()
+
+    def _field(self, title, control, dim_hex):
+        """A labelled control: small centred title above the control, so each
+        option (provider / source / target) is self-explanatory.
+
+        The title gets a fixed, centred height so its font leading can't add
+        asymmetric space — keeping the top and bottom margins of the bar even."""
+        box = QWidget(self)
+        v = QVBoxLayout(box)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(2)
+        lbl = QLabel(title, box)
+        lbl.setFixedHeight(13)
+        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setStyleSheet(f"color: {dim_hex}; font-size: 10px;")
+        v.addWidget(lbl, 0, Qt.AlignCenter)
+        v.addWidget(control, 0, Qt.AlignCenter)
+        return box
+
+    def mousePressEvent(self, event):
+        # Swallow clicks on the empty band of the capsule so they don't close
+        # the overlay (the combos handle their own clicks first).
+        event.accept()
+
+    # ----- theme-aware colours (no hard-coded light-theme values) -----
+
+    @staticmethod
+    def _chip_colors():
+        """Translucent fill + text colour for the chips, from the system
+        palette so the bar adapts to light and dark themes."""
+        bg = QApplication.palette().color(QPalette.Window)
+        text = QApplication.palette().color(QPalette.WindowText)
+        bg_rgba = f"rgba({bg.red()},{bg.green()},{bg.blue()},180)"
+        text_hex = f"#{text.red():02x}{text.green():02x}{text.blue():02x}"
+        return bg_rgba, text_hex
+
+    @staticmethod
+    def _dim_color():
+        """Dim colour for field titles / the swap icon, from the system
+        palette so it adapts to light and dark themes."""
+        c = QApplication.palette().color(QPalette.PlaceholderText)
+        return f"#{c.red():02x}{c.green():02x}{c.blue():02x}"
+
+    @staticmethod
+    def _chip_style(bg_rgba, text_hex):
+        return (f"QPushButton{{background:{bg_rgba}; color:{text_hex};"
+                f" border:none; border-radius:9px; padding:1px 0;"
+                f" font-size:12px;}}"
+                "QPushButton:hover{background:rgba(120,120,120,60);}"
+                "QPushButton::menu-indicator{width:0;}")
+
+    def _make_chip(self, bg_rgba, text_hex):
+        """A centred-text chip selector (QPushButton + menu).
+
+        A plainly-styled QPushButton centres its label by default, unlike a
+        QComboBox which left-aligns — and its compact, content-driven width
+        keeps the whole bar from ever overflowing the screen edge."""
+        btn = QPushButton(self)
+        btn.setFixedHeight(26)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setFocusPolicy(Qt.NoFocus)
+        btn.setStyleSheet(self._chip_style(bg_rgba, text_hex))
+        return btn
+
+    @staticmethod
+    def _menu_style():
+        """Minimal, palette-correct popup for the chip menus."""
+        return "QMenu{font-size:12px; border-radius:6px; padding:4px;}"
+
+    # ----- positioning -----
+
+    def place_persistent(self):
+        """Anchored at the top-centre of the current screen, mirroring the
+        annotation sub-bar (y=60). Used before any region is selected."""
+        overlay = self._overlay
+        ov_geo = overlay.geometry()
+        screen = QGuiApplication.primaryScreen()
+        s = screen.availableGeometry()
+        left = s.left() - ov_geo.left()
+        right = s.right() - ov_geo.left()
+        top = s.top() - ov_geo.top()
+        self.adjustSize()
+        w = self.width()
+        x = (s.width() - w) // 2 + left
+        x = max(left + 8, min(x, right - w - 8))
+        self.move(int(x), int(top + 60))
+
+    def _on_changed(self):
+        """Persist provider/target and re-translate unless a worker is still
+        in flight — a second concurrent request would risk rate-limiting.
+        The given values are already stored on the overlay by the pickers."""
+        overlay = self._overlay
+        Config().set("translate_source", overlay._provider)
+        Config().set("translate_target_lang", overlay._target_lang)
+        if overlay.panel is not None and overlay.panel._state != "loading":
+            overlay._change_lang()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        paint_pill(painter, self.rect(), self.RADIUS)
 
 
 # ----- overlay -----
@@ -684,12 +1080,27 @@ class TranslateOverlay(BaseOverlay):
         self.is_dragging = False
         self.sel_rect = None
         self.panel = None
+        self.capsule = None
         self._captured_png = None
         self._target_lang = Config().get("translate_target_lang", "zh-CN")
+        # Source is loaded from config but constrained to English — the built-
+        # in OCR engine only recognises English, so auto-detection or other
+        # source languages would make the translation fail or mis-tag.
+        self._source = Config().get("translate_source_lang", "en")
+        if self._source not in dict(_SOURCE_LANGS):
+            self._source = "en"
+        self._provider = Config().get("translate_source", "edge")
 
         self._signals = _TranslateSignals(self)
         self._signals.ok.connect(self._on_result_ok)
         self._signals.failed.connect(self._on_result_failed)
+
+        # Persistent provider/target sub-bar, shown for the whole session like
+        # the annotation sub-bar (created once, kept at the top).
+        self.capsule = TranslateCapsule(self)
+        self.capsule.place_persistent()
+        self.capsule.show()
+        self.capsule.raise_()
 
         self.activateWindow()
         self.setFocus()
@@ -767,12 +1178,16 @@ class TranslateOverlay(BaseOverlay):
         self.panel.place_near(sel)
         self.panel.show()
         self.panel.raise_()
+
+        # The persistent sub-bar stays in its fixed top-centre position; it
+        # does not chase the selection.
         self._start_worker()
 
     def _start_worker(self):
         threading.Thread(
             target=self._run_translate,
-            args=(self._captured_png, self._target_lang),
+            args=(self._captured_png, self._target_lang,
+                  self._provider, self._source),
             daemon=True,
         ).start()
 
@@ -792,13 +1207,13 @@ class TranslateOverlay(BaseOverlay):
         except RuntimeError:
             pass  # bridge deleted underneath us — nothing to notify
 
-    def _run_translate(self, png, target):
+    def _run_translate(self, png, target, provider="edge", source="en"):
         try:
             text = ocr_image(png)
             if not text:
                 self._emit_safe("failed", "no_text", "")
                 return
-            translated = translate_text(text, target)
+            translated = translate_text(text, target, source=source, provider=provider)
             if not translated or not translated.strip():
                 self._emit_safe("failed", "error", "")
                 return
@@ -813,3 +1228,26 @@ class TranslateOverlay(BaseOverlay):
     def _on_result_failed(self, code, detail):
         if self.panel and self.panel.isVisible():
             self.panel.show_state_error(code, detail)
+
+    def _change_lang(self):
+        """Re-translate the already captured region with the language codes the
+        sub-capsule set on the overlay. The panel reflects the loading state
+        until the worker reports back."""
+        if self.panel:
+            self.panel.show_state_loading()
+        if self._captured_png is not None:
+            self._start_worker()
+
+    def _delete_result(self):
+        """Clear the current translation result and selection so the user can
+        immediately draw a fresh region. The persistent sub-bar stays."""
+        if self.panel is not None:
+            try:
+                self.panel.hide()
+                self.panel.deleteLater()
+            except RuntimeError:
+                pass
+            self.panel = None
+        self.sel_rect = None
+        self._captured_png = None
+        self.update()  # Redraw the overlay without the selection rectangle

@@ -82,7 +82,8 @@ CapRise is a PySide6-based Windows desktop quick toolbar. Use the global hotkey 
 - **System OCR**: Uses the Windows built-in OCR engine (WinRT); no network needed for recognition
 - **Online Translation**: Based on Google's free endpoint, no API key, with multi-host failover
 - **Target Languages**: Simplified Chinese, Traditional Chinese, English, Japanese, Korean
-- **Result Card**: Rounded card fades in with a loading animation, result + one-click copy, retry on failure, and scrolling for long text
+- **Source Language**: Fixed to English (the OCR engine only recognises English); also selectable as a dropdown in the translation sub-capsule
+- **Result Card**: Rounded card fades in with a loading animation, result + one-click copy, retry on failure, and scrolling for long text; a one-click delete button in the top-right lets you immediately draw a fresh selection
 - **Multi-Monitor Safe**: The card auto-anchors near the selection within the current screen, never overflowing
 
 ### Annotation Features
@@ -105,7 +106,7 @@ CapRise is a PySide6-based Windows desktop quick toolbar. Use the global hotkey 
 
 ### Settings Features
 - **Language Switching**: Toggle between Chinese and English, takes effect immediately without restart
-- **Translate Target Language**: Configure the translation target language, takes effect immediately
+- **Translate Target/Source Language**: Configure the translation target language (takes effect immediately) and the source language (currently English only)
 - **Hotkey Configuration**: Assign custom global hotkeys per feature, applied instantly; supports per-row clear and one-click reset to defaults — the reset skips occupancy checks and runs in two passes so it takes effect immediately
 - **Tool Order**: Drag to reorder the tools in the capsule and click the eye icon to show/hide each one; items show no selection/focus highlight on click for a cleaner look
 - **Auto-start**: Set to launch on system boot, persisted to configuration
@@ -177,7 +178,9 @@ Configuration file is stored at `CapRise/config.json` under the user home direct
 - `clipboard_enabled`: Whether LAN clipboard is enabled (true / false)
 - `clipboard_expanded`: Whether the clipboard panel is expanded (true / false)
 - `clipboard_room`: Clipboard room code (6-digit number)
-- `translate_target_lang`: Translate target language (zh-CN / zh-TW / en / ja / ko)
+- `translate_target_lang`: Translate target language (zh-CN / zh-TW / en / ja / ko, switched in the translation sub-capsule)
+- `translate_source`: Translation provider (google / edge, default edge, chosen manually, never auto-switched)
+- `translate_source_lang`: Translation source language (currently en / English only, as the OCR engine only recognises English)
 - `search_files_enabled`: Whether global file search is enabled (true / false)
 - `search_apps_enabled`: Whether installed-app search is enabled (true / false)
 

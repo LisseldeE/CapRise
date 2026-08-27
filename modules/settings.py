@@ -27,6 +27,7 @@ from modules.config import Config
 from modules.i18n import I18n
 from modules.about import AboutPage
 from modules.hotkey import HOTKEY_SPECS, qkeysequence_to_win, is_valid_hotkey
+from modules.translate import _TARGET_LANGS, _SOURCE_LANGS
 
 # Dotted grip glyph used as the drag handle on each reorder row.
 GRIP_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
@@ -769,7 +770,9 @@ class SettingsDialog(QDialog):
         # initial population does not trigger redundant saves.
         self.lang_combo.currentIndexChanged.connect(self._persist)
         self.autostart_check.toggled.connect(self._persist)
-        self.translate_lang_combo.currentIndexChanged.connect(self._persist)
+        self.translate_provider_combo.currentIndexChanged.connect(self._persist)
+        self.translate_source_combo.currentIndexChanged.connect(self._persist)
+        self.translate_target_combo.currentIndexChanged.connect(self._persist)
         self.tool_order_list.order_changed.connect(self._on_tool_order_changed)
         self.tool_order_list.visibility_changed.connect(
             self._on_tool_visibility_changed)
@@ -1206,15 +1209,31 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(28, 24, 28, 24)
         layout.setSpacing(18)
 
-        self.translate_lang_combo = QComboBox()
-        self.translate_lang_combo.addItem("简体中文", "zh-CN")
-        self.translate_lang_combo.addItem("繁體中文", "zh-TW")
-        self.translate_lang_combo.addItem("English", "en")
-        self.translate_lang_combo.addItem("日本語", "ja")
-        self.translate_lang_combo.addItem("한국어", "ko")
-        self.translate_lang_combo.setFixedWidth(180)
+        self.translate_provider_combo = QComboBox()
+        self.translate_provider_combo.addItem(
+            I18n.tr("translate_source_google"), "google")
+        self.translate_provider_combo.addItem(
+            I18n.tr("translate_source_edge"), "edge")
+        self.translate_provider_combo.setFixedWidth(180)
         layout.addLayout(
-            self._row(I18n.tr("translate_target_lang"), self.translate_lang_combo))
+            self._row(I18n.tr("translate_source_provider"),
+                      self.translate_provider_combo))
+
+        self.translate_source_combo = QComboBox()
+        for code, label in _SOURCE_LANGS:
+            self.translate_source_combo.addItem(label, code)
+        self.translate_source_combo.setFixedWidth(180)
+        layout.addLayout(
+            self._row(I18n.tr("translate_source_lang"),
+                      self.translate_source_combo))
+
+        self.translate_target_combo = QComboBox()
+        for code, label in _TARGET_LANGS:
+            self.translate_target_combo.addItem(label, code)
+        self.translate_target_combo.setFixedWidth(180)
+        layout.addLayout(
+            self._row(I18n.tr("translate_target_lang"),
+                      self.translate_target_combo))
 
         hint = QLabel(I18n.tr("translate_source_hint"))
         hint.setStyleSheet("font-size: 11px; color: #868e96;")
@@ -1255,10 +1274,20 @@ class SettingsDialog(QDialog):
         autostart = config.get("autostart", False)
         self.autostart_check.setChecked(autostart)
 
-        translate_lang = config.get("translate_target_lang", "zh-CN")
-        index = self.translate_lang_combo.findData(translate_lang)
+        provider = config.get("translate_source", "edge")
+        index = self.translate_provider_combo.findData(provider)
         if index >= 0:
-            self.translate_lang_combo.setCurrentIndex(index)
+            self.translate_provider_combo.setCurrentIndex(index)
+
+        source_lang = config.get("translate_source_lang", "en")
+        index = self.translate_source_combo.findData(source_lang)
+        if index >= 0:
+            self.translate_source_combo.setCurrentIndex(index)
+
+        target_lang = config.get("translate_target_lang", "zh-CN")
+        index = self.translate_target_combo.findData(target_lang)
+        if index >= 0:
+            self.translate_target_combo.setCurrentIndex(index)
 
         anim = config.get("capsule_anim", "vertical")
         self.anim_vertical.setChecked(anim != "dynamic")
@@ -1273,7 +1302,11 @@ class SettingsDialog(QDialog):
         Config().set("autostart", autostart)
         apply_autostart(autostart)
 
-        Config().set("translate_target_lang", self.translate_lang_combo.currentData())
+        Config().set("translate_source", self.translate_provider_combo.currentData())
+        Config().set("translate_source_lang",
+                     self.translate_source_combo.currentData())
+        Config().set("translate_target_lang",
+                     self.translate_target_combo.currentData())
 
     def done(self, result):
         # Settings already apply instantly via _connect_signals(); ending here

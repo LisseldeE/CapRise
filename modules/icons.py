@@ -50,6 +50,28 @@ ICON_TRANSLATE = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" 
   <path d="M14 18h6"/>
 </svg>"""
 
+# Swap / convert between the source and target language in the translate
+# sub-bar: two arrows pointing inward at the middle.
+ICON_SWAP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M8 3 4 7l4 4"/>
+  <path d="M4 7h16"/>
+  <path d="m16 21 4-4-4-4"/>
+  <path d="M20 17H4"/>
+</svg>"""
+
+# Single-direction arrow (right) indicating flow from source to target in
+# the translate sub-bar — not the bidirectional swap.
+ICON_ARROW_RIGHT = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M5 12h14"/>
+  <path d="m12 5 7 7-7 7"/>
+</svg>"""
+
+# Close / delete an overlay element — white X on the delete bean.
+ICON_X = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M18 6 6 18"/>
+  <path d="m6 6 12 12"/>
+</svg>"""
+
 # --- Clipboard feature icons ---
 
 ICON_CLIPBOARD = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
