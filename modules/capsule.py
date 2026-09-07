@@ -201,8 +201,6 @@ class CapsuleBar(QWidget):
         # Full ordered toolbar: tool buttons in user order + settings + close.
         self._toolbar = [self._tool_buttons[k] for k in self._tool_order] \
             + [self.btn_settings, self.btn_close]
-        self._toolbar_w = len(self._toolbar) * self.BTN \
-            + (len(self._toolbar) - 1) * self.SPACING
 
         # Apply the user's per-tool show/hide choice (config["hidden_tools"]).
         self.set_tools_hidden(Config().get("hidden_tools", []))
@@ -291,9 +289,32 @@ class CapsuleBar(QWidget):
         global hotkey bindings intact — they just render invisible, so the
         capsule stays compact while the user can still trigger them by
         hotkey."""
-        hidden = set(hidden_keys or [])
+        # Track the hidden keys explicitly instead of consulting isVisible():
+        # during startup the parent capsule is not yet shown, so every child's
+        # isVisible() is False regardless of intent, which would collapse the
+        # bar to nothing. This set is the single source of truth for layout.
+        self._hidden_tools = set(hidden_keys or [])
         for key, btn in self._tool_buttons.items():
-            btn.setVisible(key not in hidden)
+            btn.setVisible(key not in self._hidden_tools)
+        # Re-measure and re-lay-out: a hidden tool must collapse the bar to
+        # fit the remaining buttons (and re-center) instead of leaving a blank
+        # gap where the button used to be. This also covers the initial call
+        # from setup_ui before the base layout is applied.
+        self._layout_manual(self._current_strip_w())
+        if self.isVisible():
+            self._recenter()
+
+    def _visible_toolbar(self):
+        """Toolbar buttons that should be laid out, in order.
+
+        Uses the explicitly tracked hidden set (not widget visibility), so it
+        returns the correct cluster even while the capsule itself is hidden
+        during startup. Settings and Close are never hidden."""
+        visible = [self.btn_settings, self.btn_close]
+        for key in reversed(self._tool_order):
+            if key not in self._hidden_tools:
+                visible.insert(0, self._tool_buttons[key])
+        return visible
 
     def reorder_tools(self, order):
         """Reorder the tool buttons to match `order` (a list of tool keys).
@@ -420,20 +441,27 @@ class CapsuleBar(QWidget):
         width (right edge = final divider, clipped by the capsule edge), while
         the capsule width grows with strip_w and the tool cluster shifts right
         past the strip. Collapsed (strip_w == 0) reproduces the old layout's
-        base geometry exactly (tools start at the left margin)."""
+        base geometry exactly (tools start at the left margin).
+
+        Only visible tool buttons are laid out: when a tool is hidden from
+        settings, the bar collapses to fit the remaining buttons exactly, so
+        no blank gap is left where the hidden button used to be."""
+        # Config-pinned settings/close stay visible; hidden tools drop out of
+        # both the width and the positioning loop.
+        visible = self._visible_toolbar()
+        tw = len(visible) * self.BTN + (len(visible) - 1) * self.SPACING
         if strip_w > 0:
-            cw = self.MARGIN + strip_w + self.SPACING + self._toolbar_w \
-                + self.MARGIN
+            cw = self.MARGIN + strip_w + self.SPACING + tw + self.MARGIN
             x = self.MARGIN + strip_w + self.SPACING
         else:
-            cw = self.MARGIN + self._toolbar_w + self.MARGIN
+            cw = self.MARGIN + tw + self.MARGIN
             x = self.MARGIN
         self.setFixedWidth(cw)
         if self.timer_display.isVisible():
             self.timer_display.setGeometry(
                 self.MARGIN, self.TOP, self._full_strip_w,
                 self.timer_display.HEIGHT)
-        for b in self._toolbar:
+        for b in visible:
             b.setGeometry(x, self.TOP, self.BTN, self.BTN)
             x += self.BTN + self.SPACING
 

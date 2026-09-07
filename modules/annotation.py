@@ -3,14 +3,17 @@ from PySide6.QtWidgets import (
     QPushButton, QFrame
 )
 from PySide6.QtCore import (
-    Qt, QRect, QRectF, QPoint, QPointF, Signal, QVariantAnimation, QEasingCurve
+    Qt, QRect, QRectF, QPoint, QPointF, Signal, QVariantAnimation, QEasingCurve,
+    QTimer
 )
 from PySide6.QtGui import (
     QPainter, QColor, QPen, QFont, QGuiApplication, QFontMetrics,
     QPainterPath, QPalette, QBrush, QKeyEvent
 )
 from modules.overlay import BaseOverlay, draw_snapshot
-from modules.icons import ICON_RECTANGLE, ICON_FREEFORM, ICON_TEXT, ICON_CLOSE
+from modules.icons import (
+    ICON_RECTANGLE, ICON_FREEFORM, ICON_TEXT, ICON_ERASER, ICON_CLOSE
+)
 from modules.i18n import I18n
 from modules.widgets import GlassIconButton, paint_pill
 
@@ -37,6 +40,73 @@ ANNOTATION_COLOR_ORDER = [
 def _accent():
     hl = QApplication.palette().color(QPalette.Highlight)
     return hl
+
+
+def _as_segments(pts):
+    """Turn a QPoint list into segment pairs; a lone point becomes a
+    zero-length segment so the erase routines don't need a special case."""
+    if len(pts) == 1:
+        return [(pts[0], pts[0])]
+    return list(zip(pts, pts[1:]))
+
+
+def _point_seg_dist(p, a, b):
+    """Distance from point `p` to segment(a,b)."""
+    ax, ay = a.x(), a.y()
+    bx, by = b.x(), b.y()
+    px, py = p.x(), p.y()
+    dx, dy = bx - ax, by - ay
+    if dx == 0 and dy == 0:
+        return ((px - ax) ** 2 + (py - ay) ** 2) ** 0.5
+    t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)
+    t = 0.0 if t < 0.0 else 1.0 if t > 1.0 else t
+    cx, cy = ax + t * dx, ay + t * dy
+    return ((px - cx) ** 2 + (py - cy) ** 2) ** 0.5
+
+
+def _point_polyline_distance(poly, p):
+    """Minimum distance from point `p` to the open polyline `poly`."""
+    best = 1e18
+    for (a, b) in zip(poly, poly[1:]):
+        d = _point_seg_dist(p, a, b)
+        if d < best:
+            best = d
+    return best
+
+
+def _orient(ax, ay, bx, by, cx, cy):
+    return (by - ay) * (cx - bx) - (bx - ax) * (cy - by)
+
+
+def _segments_intersect(a, b, c, d):
+    """Proper segment AB vs CD intersection (strict, orientation test)."""
+    o1 = _orient(a.x(), a.y(), b.x(), b.y(), c.x(), c.y())
+    o2 = _orient(a.x(), a.y(), b.x(), b.y(), d.x(), d.y())
+    o3 = _orient(c.x(), c.y(), d.x(), d.y(), a.x(), a.y())
+    o4 = _orient(c.x(), c.y(), d.x(), d.y(), b.x(), b.y())
+    return (o1 * o2 < 0) and (o3 * o4 < 0)
+
+
+def _seg_close_to_rect(a, b, rect, radius):
+    """True if segment AB passes within `radius` of the rectangle's border.
+    Distance-based (not strict crossing), so a stroke laid right on or over
+    the edge reliably deletes it. A stroke purely deep inside the box rarely
+    gets near the border, keeping nested inner annotations safe."""
+    L, R, T, B = rect.left(), rect.right(), rect.top(), rect.bottom()
+    edges = [((L, T), (R, T)), ((R, T), (R, B)),
+             ((R, B), (L, B)), ((L, B), (L, T))]
+    return any(_segments_close(a, b, QPoint(*c), QPoint(*d), radius)
+               for (c, d) in edges)
+
+
+def _segments_close(a, b, c, d, radius):
+    """True if segment AB comes within `radius` of segment CD."""
+    if _segments_intersect(a, b, c, d):
+        return True
+    for v, seg in ((a, (c, d)), (b, (c, d)), (c, (a, b)), (d, (a, b))):
+        if _point_seg_dist(v, seg[0], seg[1]) <= radius:
+            return True
+    return False
 
 
 class ColorButton(QPushButton):
@@ -186,8 +256,8 @@ class AnnotationToolbar(QWidget):
     SW_EXT = SW_PAD + len(ANNOTATION_COLOR_ORDER) * (SW + GAP)
 
     # Collapsed width incl. the leading strip (even at 0px it adds one
-    # 8px spacing): 10|strip0|8|color40|8|div1|8|rect40|8|free40|8|text40|8|close40|10
-    BASE_W = 10 + 8 + BTN + 8 + 1 + 8 + BTN * 4 + 8 * 3 + 10
+    # 8px spacing): 10|strip0|8|color40|8|div1|8|rect40|8|free40|8|text40|8|eraser40|8|close40|10
+    BASE_W = 10 + 8 + BTN + 8 + 1 + 8 + BTN * 5 + 8 * 4 + 10
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -200,9 +270,9 @@ class AnnotationToolbar(QWidget):
         self.setGraphicsEffect(shadow)
 
         # Mode order = left-to-right button order. `_slide` is a float index
-        # (0..2) that the selection plate glides across as it moves between
+        # (0..3) that the selection plate glides across as it moves between
         # buttons — linear travel with slow-fast-slow easing (InOutCubic).
-        self._modes = ["rectangle", "freeform", "text"]
+        self._modes = ["rectangle", "freeform", "text", "eraser"]
         self._slide = 0.0
         self._slide_anim = QVariantAnimation(self)
         self._slide_anim.setDuration(280)
@@ -386,6 +456,7 @@ class AnnotationToolbar(QWidget):
             ("rectangle", ICON_RECTANGLE, I18n.tr("rectangle")),
             ("freeform", ICON_FREEFORM, I18n.tr("freeform")),
             ("text", ICON_TEXT, I18n.tr("text")),
+            ("eraser", ICON_ERASER, I18n.tr("eraser")),
         ]:
             btn = GlassIconButton(svg, tip, size=self.BTN, icon_size=20,
                                   colorize_icon=False)
@@ -490,22 +561,27 @@ class AnnotationOverlay(BaseOverlay):
         self.text_editor = None  # active inline text editor
         self._text_edit_idx = None  # index of text annotation being edited, None for new
         self._drag_start = None  # start point of current drag (like screenshot approach)
-        # Per-annotation corner beans: delete (red) + move (white) dots.
-        self._delete_rects = {}
-        self._drag_rects = {}
         self._drag_ann_idx = None  # annotation currently being moved
         self._drag_offset = None   # grab point offset from the annotation origin
         self._last_drag_pos = None
         self.annotation_color = QColor(ANNOTATION_COLORS["white"])
         self._pending_text_color = None  # colour captured when a text box is drawn
+        # Eraser stroke currently being swept (transient, overlay coords).
+        self._eraser_points = None
+        self._hint_show = True
+        self._hint = I18n.tr("annotate_hint")
+        self._hint_timer = QTimer(self)
+        self._hint_timer.setSingleShot(True)
+        self._hint_timer.setInterval(1500)
+        self._hint_timer.timeout.connect(self._hide_hint)
+        self._hint_timer.start()
         self.activateWindow()
         self.setFocus()
-        # Hover tracking for the macOS-style corner beans (a faint pair that
-        # light up together — white for move, red for delete — when the
-        # cursor is over either of them).
-        self.setMouseTracking(True)
-        self._hover_ann = None   # (x, y, w, h) of the lit bean pair's annotation
         self.setup_toolbar()
+
+    def _hide_hint(self):
+        self._hint_show = False
+        self.update()
 
     def setup_toolbar(self):
         """Create the floating annotation sub-bar (same pill style as capsule)."""
@@ -531,7 +607,13 @@ class AnnotationOverlay(BaseOverlay):
 
     def _set_mode(self, mode):
         self.current_mode = mode
+        self._clear_drag()
+        self.is_drawing = False
+        self.current_shape = None
+        self._drag_start = None
+        self._eraser_points = None
         self.toolbar.set_selected(mode)
+        self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -549,6 +631,39 @@ class AnnotationOverlay(BaseOverlay):
         if self.current_shape and self.is_drawing:
             # During drag, text shape has no text content — only draw the rect
             self._draw_annotation(painter, self.current_shape, is_temp=True)
+        # Transient erase stroke being swept.
+        if self.current_mode == "eraser" and self._eraser_points:
+            pts = self._eraser_points
+            painter.setPen(QPen(QColor(255, 82, 82, 190), self.ERASE_W,
+                                Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            painter.setBrush(Qt.NoBrush)
+            if len(pts) == 1:
+                painter.drawPoint(pts[0])
+            else:
+                for a, b in zip(pts, pts[1:]):
+                    painter.drawLine(a, b)
+        # One-shot "左键绘制，右键移动" hint fading with the entry timer.
+        if self._hint_show:
+            self._draw_hint(painter)
+
+    def _draw_hint(self, painter):
+        fm = QFontMetrics(painter.font())
+        tw = fm.horizontalAdvance(self._hint)
+        pad_x, pad_y = 18, 9
+        w = tw + pad_x * 2
+        h = fm.height() + pad_y * 2
+        x = (self.width() - w) // 2
+        # Place just below the annotation toolbar (top=60, height=BAR_H) with a small gap.
+        y = 60 + AnnotationToolbar.BAR_H + 8
+        rect = QRect(int(x), int(y), int(w), int(h))
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(20, 20, 24, 215))
+        painter.drawRoundedRect(rect, h / 2, h / 2)
+        painter.setPen(QColor(245, 245, 248))
+        font = painter.font()
+        font.setPixelSize(int(fm.height() * 0.9))
+        painter.setFont(font)
+        painter.drawText(rect, Qt.AlignCenter, self._hint)
 
     def _draw_annotation(self, painter, ann, is_temp=False):
         ann_type = ann[0]
@@ -569,8 +684,6 @@ class AnnotationOverlay(BaseOverlay):
             painter.setPen(QPen(border_color, 2))
             painter.setBrush(Qt.NoBrush)
             painter.drawRect(rect)
-            if not is_temp:
-                self._draw_handles(painter, rect.topRight(), rect)
 
         elif ann_type == "freeform":
             points = ann[1]
@@ -582,9 +695,6 @@ class AnnotationOverlay(BaseOverlay):
                 path.lineTo(pt)
             painter.setBrush(Qt.NoBrush)
             painter.drawPath(path)
-            if not is_temp:
-                bounds = path.boundingRect().toRect()
-                self._draw_handles(painter, bounds.topRight(), bounds)
 
         elif ann_type == "text":
             rect = ann[1]
@@ -598,128 +708,78 @@ class AnnotationOverlay(BaseOverlay):
                 painter.setFont(QFont("Segoe UI", 14))
                 painter.setPen(border_color)
                 painter.drawText(rect.adjusted(6, 6, -6, -6), Qt.AlignLeft | Qt.AlignTop, text)
-                self._draw_handles(painter, rect.topRight(), rect)
 
-    def _handle_rects(self, top_right, annotation_rect):
-        """Layout the two corner controls of an annotation, top-right:
-           [drag grip] [delete]. Both sit INSIDE the annotation's right edge
-           so they never poke out beyond the content. If the corner is too
-           close to the top edge, both controls drop below the annotation."""
-        btn_size = 11
-        spacing = 4
-        margin = 6
-        y = top_right.y() - btn_size - margin
-        if y < 0:
-            y = annotation_rect.bottom() + margin
-        # Right-align: delete's right edge touches the content's right edge;
-        # the drag grip sits to its left.
-        left_limit = annotation_rect.left() + margin
-        xd = max(int(top_right.x() - btn_size), int(left_limit))
-        delete_rect = QRect(int(xd), int(y), btn_size, btn_size)
-        xg = max(int(xd - btn_size - spacing), int(left_limit))
-        drag_rect = QRect(int(xg), int(y), btn_size, btn_size)
-        return drag_rect, delete_rect
+    # ---- moving (right-drag) & eraser ----
 
-    def _draw_handles(self, painter, top_right, annotation_rect):
-        """Draw two small rounded beans at the annotation's top-right corner,
-        macOS-traffic-light style. Both sit as a faint neutral grey pair; when
-        the cursor is over EITHER bean of the same annotation, both light up —
-        white for move (drag), red for delete. Records both hit rects."""
-        drag_rect, delete_rect = self._handle_rects(top_right, annotation_rect)
-        ann_key = (annotation_rect.x(), annotation_rect.y(),
-                   annotation_rect.width(), annotation_rect.height())
-        self._delete_rects[ann_key] = delete_rect
-        self._drag_rects[ann_key] = drag_rect
+    HIT_TOL = 10  # px tolerance when grabbing a freeform by its line
 
-        painter.setRenderHint(QPainter.Antialiasing)
-        lit = self._hover_ann == ann_key
-        # While actively dragging an annotation, keep its bean pair lit even
-        # if the cursor drifts off the beans (the box follows the mouse).
-        if not lit and self._drag_ann_idx is not None:
-            idx = self._drag_ann_idx
-            if 0 <= idx < len(self.annotations):
-                dcorner = self._annotation_corner(self.annotations[idx])
-                if dcorner is not None:
-                    dr = dcorner[1]
-                    if (dr.x(), dr.y(), dr.width(), dr.height()) == ann_key:
-                        lit = True
-        self._beam_to(painter, drag_rect, QColor(255, 255, 255), lit)
-        self._beam_to(painter, delete_rect, QColor(255, 95, 87), lit)
+    def _grab_target(self, pos):
+        """Topmost annotation under `pos` for a right-hold move. Rects/text
+        grab by their whole box (the inside works too — move is a dedicated
+        gesture now), freeform grabs near its drawn polyline."""
+        for i in range(len(self.annotations) - 1, -1, -1):
+            ann = self.annotations[i]
+            if ann[0] in ("rectangle", "text"):
+                if ann[1].contains(pos):
+                    return i
+            elif ann[0] == "freeform":
+                if len(ann[1]) >= 2 and _point_polyline_distance(ann[1], pos) <= self.HIT_TOL:
+                    return i
+        return None
 
-    def _beam_to(self, painter, bean_rect, lit_color, lit):
-        """Paint a single corner bean: faint grey when idle, `lit_color` when
-        its annotation's bean pair is hovered. A soft thin ring keeps the bean
-        legible over the dark canvas."""
-        if lit:
-            fill = QColor(lit_color)
-            ring = QColor(255, 255, 255, 70)
+    def _grab_annotation(self, idx, pos):
+        """Start moving a stored annotation: remember its index and the grab
+        offset from its origin so the move tracks the cursor in place."""
+        self._drag_ann_idx = idx
+        ref = (self.annotations[idx][1][0] if
+               self.annotations[idx][0] == "freeform"
+               else self.annotations[idx][1].topLeft())
+        self._drag_offset = pos - ref
+        self._last_drag_pos = pos
+
+    def _clear_drag(self):
+        self._drag_ann_idx = None
+        self._drag_offset = None
+        self._last_drag_pos = None
+
+    def _move_annotation(self, idx, delta):
+        """Translate a stored annotation by `delta` (QPoint)."""
+        ann = self.annotations[idx]
+        if ann[0] == "freeform":
+            ann[1][:] = [pt + delta for pt in ann[1]]
         else:
-            # Idle beans stay very faint so they barely cover the capture.
-            fill = QColor(255, 255, 255, 18)
-            ring = QColor(255, 255, 255, 55)
-        painter.setPen(QPen(ring, 1))
-        painter.setBrush(fill)
-        painter.drawEllipse(bean_rect)
+            ann[1].translate(delta)
 
-    def _update_handle_hover(self, pos):
-        """Track which annotation's bean pair the cursor is over; both beans
-        of that pair light together."""
-        hovered = None
-        for ann in self.annotations:
-            corner = self._annotation_corner(ann)
-            if corner is None:
-                continue
-            drag_rect, delete_rect = self._handle_rects(*corner)
-            # Union the two beans so moving between them (over the gap)
-            # keeps the pair lit instead of flickering.
-            if drag_rect.united(delete_rect).contains(pos):
-                r = corner[1]
-                hovered = (r.x(), r.y(), r.width(), r.height())
-                break
-        if hovered != self._hover_ann:
-            self._hover_ann = hovered
-            self.update()
+    # ---- eraser ----
 
-    def leaveEvent(self, event):
-        # Moving out of the window clears any lit bean pair.
-        if self._hover_ann is not None:
-            self._hover_ann = None
-            self.update()
-        super().leaveEvent(event)
+    ERASE_R = 10  # hit radius for freeform (px)
+    ERASE_W = 4   # drawn stroke width (px) — thinner than the hit radius
 
-    def _get_delete_rects(self):
-        result = {}
-        for i, ann in enumerate(self.annotations):
-            corner = self._annotation_corner(ann)
-            if corner is not None:
-                result[i] = self._handle_rects(*corner)[1]
-        return result
+    def _erase_annotations(self, stroke):
+        """Delete the topmost-first list of every annotation the erase stroke
+        swept over, then repaint and keep focus for continued sweeping."""
+        doomed = [i for i, ann in enumerate(self.annotations)
+                  if self._stroke_hits_annotation(stroke, ann)]
+        for i in reversed(doomed):
+            self.annotations.pop(i)
+        self.update()
+        self.setFocus()
 
-    def _get_drag_rects(self):
-        result = {}
-        for i, ann in enumerate(self.annotations):
-            corner = self._annotation_corner(ann)
-            if corner is not None:
-                result[i] = self._handle_rects(*corner)[0]
-        return result
-
-    def _annotation_corner(self, ann):
-        """Return (top_right, annotation_rect) for a stored annotation,
-        or None if it has no usable geometry."""
+    def _stroke_hits_annotation(self, stroke, ann):
+        """True if the erase `stroke` (list of QPoint) touches `ann`."""
+        segs = _as_segments(stroke)
         ann_type = ann[0]
         if ann_type in ("rectangle", "text"):
             rect = ann[1]
-            return (rect.topRight(), rect)
+            return any(_seg_close_to_rect(a, b, rect, self.ERASE_R)
+                       for (a, b) in segs)
         if ann_type == "freeform":
-            points = ann[1]
-            if len(points) >= 2:
-                path = QPainterPath()
-                path.moveTo(points[0])
-                for pt in points[1:]:
-                    path.lineTo(pt)
-                bounds = path.boundingRect().toRect()
-                return (bounds.topRight(), bounds)
-        return None
+            poly = ann[1]
+            if len(poly) < 2:
+                return False
+            return any(_segments_close(a, b, c, d, self.ERASE_R)
+                       for (a, b) in segs for (c, d) in zip(poly, poly[1:]))
+        return False
 
     def _is_text_double_click(self, pos):
         """Check if position is inside an existing text annotation (for double-click edit)"""
@@ -731,41 +791,37 @@ class AnnotationOverlay(BaseOverlay):
         return None
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            pos = event.position().toPoint()
+        pos = event.position().toPoint()
+        # Right-hold = move: drag the annotation under the cursor. Left is
+        # always reserved for drawing/erasing, so move never collides.
+        if event.button() == Qt.RightButton:
+            if self.toolbar and self.toolbar._ext > 0.5:
+                self.toolbar.collapse_color_strip()
+                return
+            target = self._grab_target(pos)
+            if target is not None:
+                self._finish_text_edit()
+                self._grab_annotation(target, pos)
+                self.update()
+            return
 
+        if event.button() == Qt.LeftButton:
             # A click anywhere on the overlay while the color strip is open
             # collapses it first (does not start a new annotation).
             if self.toolbar and self.toolbar._ext > 0.5:
                 self.toolbar.collapse_color_strip()
                 return
 
-            # Check delete buttons first
-            delete_rects = self._get_delete_rects()
-            for idx, rect in delete_rects.items():
-                if rect.contains(pos):
+            # Eraser mode: begin sweeping a transient erase stroke.
+            if self.current_mode == "eraser":
+                if self.text_editor:
                     self._finish_text_edit()
-                    self.annotations.pop(idx)
-                    self._delete_rects = {}
-                    self._drag_rects = {}
-                    self.update()
-                    return
+                self.is_drawing = True
+                self._eraser_points = [pos]
+                self.update()
+                return
 
-            # Drag handle: grab an existing annotation to move it.
-            if self._drag_ann_idx is None:
-                for idx, rect in self._get_drag_rects().items():
-                    if rect.contains(pos):
-                        self._finish_text_edit()
-                        ann = self.annotations[idx]
-                        ref = (ann[1][0] if ann[0] == "freeform"
-                               else ann[1].topLeft())
-                        self._drag_ann_idx = idx
-                        self._drag_offset = pos - ref
-                        self._last_drag_pos = pos
-                        self.update()
-                        return
-
-            # If text editor is active and user clicks outside it, finish editing
+            # If a text editor is active and user clicks outside it, finish
             if self.text_editor:
                 if not self.text_editor.geometry().contains(pos):
                     self._finish_text_edit()
@@ -773,7 +829,8 @@ class AnnotationOverlay(BaseOverlay):
                     super().mousePressEvent(event)
                     return
 
-            # Start drawing (same approach as screenshot: store start_point)
+            # Start drawing a new annotation (left always draws, even over an
+            # existing one — moving is the right-button's job).
             self._drag_start = pos
             self.is_drawing = True
             brush = self.annotation_color.name()  # colour frozen at draw-time
@@ -791,7 +848,9 @@ class AnnotationOverlay(BaseOverlay):
             pos = event.position().toPoint()
             existing = self._is_text_double_click(pos)
             if existing:
-                # Cancel the drawing started by the first click
+                # A single-click press may have begun a move — cancel it and
+                # edit the text instead.
+                self._clear_drag()
                 self.is_drawing = False
                 self.current_shape = None
                 self._drag_start = None
@@ -802,26 +861,20 @@ class AnnotationOverlay(BaseOverlay):
 
     def mouseMoveEvent(self, event):
         pos = event.position().toPoint()
-        # Keep the corner beans lit as they're hovered (before any early
-        # return below, so the state stays current while dragging too).
-        self._update_handle_hover(pos)
-        # Dragging an existing annotation through its grip handle.
+        # Move: right-hold dragging the annotation grabbed at the cursor.
         if self._drag_ann_idx is not None and self._last_drag_pos is not None:
-            ann = self.annotations[self._drag_ann_idx]
-            if ann[0] == "freeform":
-                delta = pos - self._last_drag_pos
-                pts = ann[1]  # translate the shared list in place (tuple-immutable)
-                pts[:] = [pt + delta for pt in pts]
-                self._last_drag_pos = pos
-            else:
-                ann[1].moveTopLeft(pos - self._drag_offset)
-            self._drag_rects = {}
-            self._delete_rects = {}
+            delta = pos - self._last_drag_pos
+            self._move_annotation(self._drag_ann_idx, delta)
+            self._last_drag_pos = pos
             self.update()
             return
-
+        # Eraser: extend the transient erase stroke.
+        if self.current_mode == "eraser" and self.is_drawing:
+            self._eraser_points.append(pos)
+            self.update()
+            return
+        # Drawing a new annotation.
         if self.is_drawing and self._drag_start and self.current_shape:
-            pos = event.position().toPoint()
             brush = self.current_shape[-1]  # keep the draw-time colour
             if self.current_mode == "rectangle":
                 # Same approach as screenshot: QRect(start, end).normalized()
@@ -833,17 +886,19 @@ class AnnotationOverlay(BaseOverlay):
             self.update()
 
     def mouseReleaseEvent(self, event):
-        # Finish an annotation move started from the grip handle.
-        if event.button() == Qt.LeftButton and self._drag_ann_idx is not None:
-            self._drag_ann_idx = None
-            self._drag_offset = None
-            self._last_drag_pos = None
-            self._drag_rects = {}
-            self._delete_rects = {}
-            # Re-evaluate hover at the release point, otherwise the bean
-            # pair stays dark even though the cursor is still over it.
-            self._update_handle_hover(event.position().toPoint())
+        # Finish moving a right-dragged annotation.
+        if event.button() == Qt.RightButton and self._drag_ann_idx is not None:
+            self._clear_drag()
             self.update()
+            return
+
+        # Eraser: on release, delete every annotation the stroke swept over.
+        if event.button() == Qt.LeftButton and self.current_mode == "eraser" \
+                and self._eraser_points:
+            pts = self._eraser_points
+            self._eraser_points = None
+            self.is_drawing = False
+            self._erase_annotations(pts)
             return
 
         if event.button() == Qt.LeftButton and self.is_drawing:
@@ -866,7 +921,6 @@ class AnnotationOverlay(BaseOverlay):
                         self._start_text_edit(rect, "", None)
             self.current_shape = None
             self._drag_start = None
-            self._delete_rects = {}
             self.update()
 
     def _start_text_edit(self, rect, text, edit_idx):

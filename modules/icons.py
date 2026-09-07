@@ -35,6 +35,12 @@ ICON_FREEFORM = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" f
   <path d="M3 17c3-2 6-10 9-6s6 4 9 0"/>
 </svg>"""
 
+ICON_ERASER = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/>
+  <path d="M22 21H7"/>
+  <path d="m5 11 9 9"/>
+</svg>"""
+
 ICON_TEXT = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
   <polyline points="4 7 4 4 20 4 20 7"/>
   <line x1="12" y1="4" x2="12" y2="20"/>
