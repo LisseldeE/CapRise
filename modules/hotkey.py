@@ -121,6 +121,7 @@ HOTKEY_SPECS = [
     (6, "hotkey_search", "search", ""),
     (7, "hotkey_settings", "settings", ""),
     (8, "hotkey_picker", "color_picker", ""),
+    (9, "hotkey_record", "record", ""),
 ]
 
 

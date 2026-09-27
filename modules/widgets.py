@@ -94,14 +94,37 @@ def _to_hex(c):
     return f"#{c.red():02x}{c.green():02x}{c.blue():02x}"
 
 
+# 胶囊栏内容悬浮专用的中性灰。它只作用于胶囊内的玻璃悬浮效果，不跟随系统
+# 强调色 —— 系统按钮、开关、列表选中依旧使用系统蓝。
+# 深色主题用浅灰配深墨，浅色主题用中灰配白墨。
+_GLASS_LIGHT_GREY = QColor(198, 203, 210)   # #C6CBD2
+_GLASS_DARK_GREY = QColor(111, 117, 126)    # #6F757E
+
+
+def is_dark_theme():
+    """当前系统主题是否为深色（按窗口底色明度判断）。"""
+    return QApplication.palette().color(QPalette.Window).lightness() < 128
+
+
+def glass_accent():
+    """胶囊内玻璃悬浮色：深色主题浅灰，浅色主题中灰。"""
+    return QColor(_GLASS_LIGHT_GREY if is_dark_theme() else _GLASS_DARK_GREY)
+
+
+def glass_ink():
+    """中性灰底上的图标色：深色主题深墨，浅色主题白。"""
+    return QColor(26, 28, 32) if is_dark_theme() else QColor(255, 255, 255)
+
+
 class GlassIconButton(QPushButton):
     """Icon button with a smooth hover / press / toggle animation.
 
-    Hover and press fade a translucent highlight (the system accent color —
-    light blue on Windows) in over 180 ms, the icon color cross-fades to
-    that accent, and a click nudges the button 1 px down (the reference
-    AnimatedButton pattern). A persistent lit state marks toggles that are
-    ON. Emits `rightClicked` on right-click.
+    Hover and press fade a translucent neutral-grey glass plate in over
+    180 ms (the capsule family's own accent — deliberately NOT the system
+    accent blue, which stays reserved for system buttons and switches),
+    the icon color cross-fades to that grey, and a click nudges the button
+    1 px down (the reference AnimatedButton pattern). A persistent lit state
+    marks toggles that are ON. Emits `rightClicked` on right-click.
     """
 
     rightClicked = Signal()
@@ -113,10 +136,10 @@ class GlassIconButton(QPushButton):
         self._svg = svg_content
         self._size = size
         self._normal = QApplication.palette().color(QPalette.WindowText)
-        self._hover = QColor(hover_color) if hover_color else \
-            QApplication.palette().color(QPalette.Highlight)
-        self._hover_bg = hover_bg_color or \
-            QApplication.palette().color(QPalette.Highlight)
+        # 未显式指定时走胶囊专用中性灰；显式传入（如删除按钮的红）则用调用方颜色。
+        self._glass = hover_bg_color is None
+        self._hover = QColor(hover_color) if hover_color else glass_accent()
+        self._hover_bg = hover_bg_color or glass_accent()
         self._icon_size = icon_size
         # When False the SVG icon keeps its original "window text" color under
         # hover/press too — only the background plate animates. Used by the
@@ -172,10 +195,11 @@ class GlassIconButton(QPushButton):
             self._t = float(value)
         if self._active:
             # Stable plate: fixed accent plate, icon flips to the on-accent ink
-            # so it stays readable on both themes.
+            # so it stays readable on both themes. 中性灰底用深/白墨，显式底色
+            # （如红色）仍用系统 HighlightedText。
             self._alpha = self.ACTIVE_ALPHA
-            self._icon_color = QApplication.palette().color(
-                QPalette.HighlightedText)
+            self._icon_color = glass_ink() if self._glass else \
+                QApplication.palette().color(QPalette.HighlightedText)
         else:
             self._alpha = int(self.HOVER_ALPHA * self._t)
             if self._colorize_icon:
@@ -255,8 +279,7 @@ class GlassIconButton(QPushButton):
             # Theme-aware plate brightness: a dark pill can carry a slightly
             # deeper tint, a light pill needs a brighter one to keep the
             # glass readable against the light background.
-            dark = QApplication.palette().color(QPalette.Window).lightness() < 128
-            lift = 115 if dark else 145
+            lift = 115 if is_dark_theme() else 145
             plate = QColor(self._hover_bg).lighter(lift)
             p.setPen(Qt.NoPen)
             p.setBrush(QColor(plate.red(), plate.green(), plate.blue(), alpha))

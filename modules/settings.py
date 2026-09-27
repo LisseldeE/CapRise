@@ -919,6 +919,7 @@ class SettingsDialog(QDialog):
             "clipboard": I18n.tr("clipboard"),
             "search": I18n.tr("search"),
             "timer": I18n.tr("timer"),
+            "record": I18n.tr("record"),
             "picker": I18n.tr("color_picker"),
         }
         self.tool_order_list.set_tool_labels(tool_labels, grip_pix)
@@ -932,7 +933,7 @@ class SettingsDialog(QDialog):
         order = Config().get(
             "tool_order",
             ["screenshot", "annotation", "translate", "clipboard", "search",
-             "timer", "picker"])
+             "timer", "record", "picker"])
         for key in order:
             if key not in tool_labels:
                 continue

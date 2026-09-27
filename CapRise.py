@@ -8,7 +8,7 @@ import sys
 import os
 import ctypes
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
-from PySide6.QtGui import QIcon, QKeySequence, QPalette, QColor
+from PySide6.QtGui import QIcon, QKeySequence
 from PySide6.QtCore import Qt
 from modules.single_instance import SingleInstance, poke_existing_instance
 from modules.config import Config
@@ -38,18 +38,6 @@ def set_app_user_model_id():
             "LisseldeE.CapRise.Version")
     except Exception:
         pass
-
-
-def apply_neutral_accent(app):
-    """用中性浅灰替换系统强调蓝，作为全局悬停/焦点/选中色。"""
-    pal = app.palette()
-    if pal.color(QPalette.Window).lightness() < 128:
-        accent, ink = QColor(198, 203, 210), QColor(26, 28, 32)
-    else:
-        accent, ink = QColor(111, 117, 126), QColor(255, 255, 255)
-    pal.setColor(QPalette.Highlight, accent)
-    pal.setColor(QPalette.HighlightedText, ink)
-    app.setPalette(pal)
 
 
 def load_app_icon():
@@ -106,8 +94,6 @@ class CapRiseApp:
         self.app.setQuitOnLastWindowClosed(False)
         self.app.setApplicationName("CapRise")
         self.app.setWindowIcon(load_app_icon())
-        # Must run before any widget is built so cached accent colours follow.
-        apply_neutral_accent(self.app)
 
         Config()
         I18n.get_language()
@@ -175,6 +161,7 @@ class CapRiseApp:
             "hotkey_search": self._on_search,
             "hotkey_settings": self._on_settings,
             "hotkey_picker": self._on_picker,
+            "hotkey_record": self.capsule.toggle_record,
         }
         self._hotkey_callbacks = {}
         for hotkey_id, cfg_key, _label, default_seq in HOTKEY_SPECS:
@@ -212,6 +199,8 @@ class CapRiseApp:
         self.capsule.btn_timer.clicked.connect(self._on_timer)
         # Color picker: enter eyedropper mode.
         self.capsule.btn_color_picker.clicked.connect(self._on_picker)
+        # Record: click to start / stop recording (same entry as hotkey_record).
+        self.capsule.btn_record.clicked.connect(self.capsule.toggle_record)
 
     def toggle_capsule(self):
         if self.active_overlay is not None:
@@ -222,6 +211,14 @@ class CapRiseApp:
             # doesn't unexpectedly reopen after the fade-out.
             self._pending_search = False
             self._search_window.close_search()
+            return
+        # 录制中的 mini 小胶囊本身就是「已收起」态：快捷键应当把它展开回完整
+        # 胶囊，而不是再收一次 —— 否则屏幕上连「录制中」的指示都会消失。
+        if self.capsule.is_mini():
+            self.capsule.show_capsule()
+            if (self.clipboard_mgr.is_enabled()
+                    and self.clipboard_mgr.is_expanded()):
+                self.clipboard_mgr.show_card()
             return
         # When the LAN clipboard is enabled, Ctrl+` surfaces the capsule and
         # (if the user last left it expanded) the clipboard card together;

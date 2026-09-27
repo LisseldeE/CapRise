@@ -12,7 +12,7 @@ from PySide6.QtCore import (
     QEasingCurve, Property
 )
 from PySide6.QtGui import (
-    QColor, QPainter, QPen, QFont, QFontMetrics, QPalette
+    QColor, QPainter, QFont, QPalette
 )
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QDialog,
@@ -21,8 +21,8 @@ from PySide6.QtWidgets import (
 )
 
 from modules.i18n import I18n
-from modules.icons import ICON_ROTATE_CCW, ICON_CLOSE, ICON_TIMER
-from modules.widgets import GlassIconButton, paint_pill, make_pixmap
+from modules.icons import ICON_TIMER
+from modules.widgets import paint_pill, make_pixmap
 from modules.config import Config
 from modules.family import FamilyWindowRegistry
 
@@ -40,6 +40,13 @@ def format_hms(seconds):
     h, rem = divmod(seconds, 3600)
     m, s = divmod(rem, 60)
     return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def phase_label(phase, paused=False):
+    """Phase caption for the status strip (shows "paused" while frozen)."""
+    if paused:
+        return I18n.tr("timer_pause")
+    return I18n.tr(_PHASE_KEYS.get(phase, "timer_countdown"))
 
 
 class TimerManager(QObject):
@@ -161,6 +168,10 @@ class TimerManager(QObject):
     def remaining(self):
         return max(0, self._remaining)
 
+    def total_seconds(self):
+        """当前阶段的总时长（用于收起态圆环计算剩余百分比）。"""
+        return self._phase_seconds(self._phase) if self._phase else 0
+
     def is_active(self):
         return self._phase is not None
 
@@ -213,146 +224,6 @@ class TimerManager(QObject):
             else:
                 self.finished.emit("break")
                 self._begin("focus", self._focus_sec)
-
-
-class _ClickableLabel(QLabel):
-    """QLabel that emits clicked() on a left press (used to pause/resume)."""
-
-    clicked = Signal()
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.setCursor(Qt.PointingHandCursor)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.clicked.emit()
-        super().mousePressEvent(event)
-
-
-class TimerDisplay(QWidget):
-    """Left strip of the capsule shown while a timer is active.
-
-    Layout: phase + remaining HH:MM:SS on the left (clickable to
-    pause/resume), and a small vertical column of controls on the right
-    (reset on top, stop below) that never overlaps the text. The capsule
-    paints the shared glass pill underneath; this widget only draws a
-    hairline divider at its right edge.
-    """
-
-    pause_toggled = Signal()
-    reset_requested = Signal()
-    close_requested = Signal()
-
-    HEIGHT = 44
-    BTN = 20
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._paused = False
-        self._notice = ""
-        self._notice_until = 0.0
-        self.setFixedHeight(self.HEIGHT)
-
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 0, 10, 0)
-
-        font = QFont("Consolas")
-        font.setPointSize(11)
-        fm = QFontMetrics(font)
-        # Right gap (time -> buttons) matches the left gap (title -> time),
-        # which is exactly one space in the label font.
-        lay.setSpacing(fm.horizontalAdvance(" "))
-
-        self._label = _ClickableLabel("")
-        self._label.setFont(font)
-        # Left-align with a dynamic width so the time always hugs the strip's
-        # left margin — the outer gaps (text->left, buttons->right) stay
-        # symmetric instead of leaving a fixed-width slack on the left.
-        self._label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        self._label.setToolTip(I18n.tr("timer_pause"))
-        self._label.clicked.connect(self.pause_toggled)
-        lay.addWidget(self._label)
-
-        # Compact horizontal control row on the right: reset then stop, side
-        # by side, so the controls stay a single row high and read level with
-        # the time text (a vertical stack made the buttons tower over the
-        # other capsule icons).
-        controls = QHBoxLayout()
-        controls.setSpacing(2)
-        self._btn_reset = GlassIconButton(
-            ICON_ROTATE_CCW, I18n.tr("timer_reset_tip"), size=self.BTN,
-            icon_size=11, colorize_icon=False)
-        self._btn_reset.clicked.connect(self.reset_requested)
-        self._btn_close = GlassIconButton(
-            ICON_CLOSE, I18n.tr("timer_close_tip"), size=self.BTN,
-            icon_size=11, hover_color="#e03131",
-            hover_bg_color=QColor(224, 49, 49), colorize_icon=False)
-        self._btn_close.clicked.connect(self.close_requested)
-        controls.addWidget(self._btn_reset)
-        controls.addWidget(self._btn_close)
-        lay.addLayout(controls)
-
-    # ----- size -----
-
-    def sizeHint(self):
-        # The strip is sized to its current content: left-aligned label (its
-        # dynamic text width) + spacing + right button column + margins. The
-        # capsule relies on this to reserve exactly the room needed.
-        return self.layout().sizeHint()
-
-    # ----- state -----
-
-    @staticmethod
-    def _phase_text(phase):
-        if phase == "paused":
-            return I18n.tr("timer_pause")
-        return I18n.tr(_PHASE_KEYS.get(phase, "timer_countdown"))
-
-    def show_phase(self, phase, remaining, paused=False):
-        """Refresh the label with the current phase/time (called each tick)."""
-        if time.monotonic() < self._notice_until:
-            return  # keep the transient "phase finished" notice
-        # Undo the width pin applied by show_notice, back to dynamic sizing.
-        self._label.setMinimumWidth(0)
-        self._label.setText(
-            f"{self._phase_text('paused' if paused else phase)} "
-            f"{format_hms(remaining)}")
-        self.set_paused(paused)
-
-    def set_paused(self, paused):
-        if paused == self._paused:
-            return
-        self._paused = bool(paused)
-        if self._paused:
-            # Grey the text out so pausing reads visually; clicking resumes.
-            self._label.setStyleSheet("color: rgba(128, 128, 128, 190);")
-            self._label.setToolTip(I18n.tr("timer_resume"))
-        else:
-            self._label.setStyleSheet("")
-            self._label.setToolTip(I18n.tr("timer_pause"))
-
-    def show_notice(self, message):
-        """Transient "phase finished" message (e.g. 专注结束)."""
-        self._notice = message
-        self._notice_until = time.monotonic() + 2.5
-        # Pin the label to its current (steady-state) width and elide longer
-        # messages, so the brief notice never reflows or clips the strip
-        # (English notices can exceed the width of the phase+time text).
-        fm = QFontMetrics(self._label.font())
-        w = max(40, fm.horizontalAdvance(self._label.text()))
-        self._label.setMinimumWidth(w)
-        self._label.setText(fm.elidedText(message, Qt.ElideRight, w))
-        self.set_paused(False)
-
-    # ----- painting -----
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(QPen(QColor(128, 128, 128, 100), 1))
-        p.drawLine(self.width() - 1, 12, self.width() - 1, self.height() - 12)
-        p.end()
 
 
 class WheelNumberPicker(QWidget):
@@ -795,7 +666,7 @@ class TimerNoticeOverlay(QWidget):
 
     H = 52  # pill height (rounded ends: radius = H / 2)
 
-    def __init__(self, message, parent=None):
+    def __init__(self, message, icon_svg=ICON_TIMER, parent=None):
         super().__init__(parent)
         self.setWindowFlags(
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
@@ -814,7 +685,7 @@ class TimerNoticeOverlay(QWidget):
         icon_hex = (f"#{icon_color.red():02x}{icon_color.green():02x}"
                     f"{icon_color.blue():02x}")
         icon = QLabel()
-        icon.setPixmap(make_pixmap(ICON_TIMER, icon_hex, 18))
+        icon.setPixmap(make_pixmap(icon_svg, icon_hex, 18))
         lay.addWidget(icon)
 
         msg = QLabel(message)

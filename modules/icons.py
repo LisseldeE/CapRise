@@ -195,6 +195,21 @@ ICON_NEXT = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill=
   <line x1="18" y1="5" x2="18" y2="19"/>
 </svg>"""
 
+# --- Record status icons ---
+
+# Stop: a filled rounded square (stroke is thickened to a solid block, since
+# make_pixmap only recolors stroke= and a literal fill="currentColor" would
+# not resolve).
+ICON_STOP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="6.5" y="6.5" width="11" height="11" rx="2"/>
+</svg>"""
+
+# Record: outer ring + solid centre dot, used as the recording notice badge.
+ICON_RECORD = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="12" cy="12" r="9"/>
+  <circle cx="12" cy="12" r="1" stroke-width="6"/>
+</svg>"""
+
 
 def icon_svg(name):
     icons = {
@@ -224,5 +239,7 @@ def icon_svg(name):
         "music": ICON_MUSIC,
         "prev": ICON_PREV,
         "next": ICON_NEXT,
+        "stop": ICON_STOP,
+        "record": ICON_RECORD,
     }
     return icons.get(name)

@@ -14,14 +14,14 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QPainter, QColor, QPen, QFont, QGuiApplication, QFontMetrics,
-    QPainterPath, QPalette, QBrush, QKeyEvent
+    QPainterPath, QBrush, QKeyEvent
 )
 from modules.overlay import BaseOverlay, draw_snapshot
 from modules.icons import (
     ICON_RECTANGLE, ICON_FREEFORM, ICON_TEXT, ICON_ERASER, ICON_CLOSE
 )
 from modules.i18n import I18n
-from modules.widgets import GlassIconButton, paint_pill
+from modules.widgets import GlassIconButton, paint_pill, glass_accent
 
 
 # Annotation drawing colours: white, black, and the standard seven colours.
@@ -44,8 +44,8 @@ ANNOTATION_COLOR_ORDER = [
 
 
 def _accent():
-    hl = QApplication.palette().color(QPalette.Highlight)
-    return hl
+    """标注子栏（胶囊家族）内的高亮色：中性灰，不跟随系统强调蓝。"""
+    return glass_accent()
 
 
 def _as_segments(pts):
@@ -547,7 +547,7 @@ class AnnotationToolbar(QWidget):
         slider = QRect(x, 6, self.BTN, self.BTN)
         if slider.intersects(self.rect()):
             painter.setPen(Qt.NoPen)
-            hl = QApplication.palette().color(QPalette.Highlight)
+            hl = _accent()
             painter.setBrush(QColor(hl.red(), hl.green(), hl.blue(), 150))
             painter.drawRoundedRect(slider, self.BTN // 3, self.BTN // 3)
 

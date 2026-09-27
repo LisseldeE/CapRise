@@ -157,12 +157,19 @@ TRANSLATIONS = {
         "animation_dynamic": "左右展开",
         "animation_preview_hint": "点击选项切换动画效果，修改后立即生效",
         # Music capsule (SMTC now-playing)
-        "music_capsule": "音乐胶囊",
-        "music_capsule_hint": "检测到系统正在播放音乐时，在胶囊栏左侧显示歌曲信息与控制按钮。仅支持已接入系统媒体控制的播放器。",
+        "music_capsule": "音乐状态",
+        "music_capsule_hint": "检测到系统正在播放音乐时，歌曲信息与控制按钮并入胶囊栏，与录制、倒计时按优先级（录制 > 音乐 > 倒计时）自动展开一项，其余收起为小图标。仅支持已接入系统媒体控制的播放器。",
         "music_prev": "上一曲",
         "music_play": "播放",
         "music_pause": "暂停",
         "music_next": "下一曲",
+        # Record feature
+        "record": "录制",
+        "record_stop_tip": "停止录制",
+        "record_saved": "录制已保存",
+        "record_failed_detail": "录制失败：{detail}",
+        "recording": "录制中",
+        "record_done": "录制完成",
         # About / check for update
         "ok": "确定",
         "about_version_label": "版本",
@@ -328,12 +335,19 @@ TRANSLATIONS = {
         "animation_dynamic": "Left-Right Expand",
         "animation_preview_hint": "Click an option to switch the animation; takes effect immediately",
         # Music capsule (SMTC now-playing)
-        "music_capsule": "Music Capsule",
-        "music_capsule_hint": "Shows the current track and playback controls to the left of the capsule bar while a media session is playing. Only players that support Windows system media controls are detected.",
+        "music_capsule": "Music Status",
+        "music_capsule_hint": "When a media session is playing, the track info and playback controls merge into the capsule bar, sharing it with recording and the timer: the highest priority (record > music > timer) stays expanded while the rest collapse to small icons. Only players that support Windows system media controls are detected.",
         "music_prev": "Previous",
         "music_play": "Play",
         "music_pause": "Pause",
         "music_next": "Next",
+        # Record feature
+        "record": "Record",
+        "record_stop_tip": "Stop recording",
+        "record_saved": "Recording saved",
+        "record_failed_detail": "Recording failed: {detail}",
+        "recording": "Recording",
+        "record_done": "Recording done",
         # About / check for update
         "ok": "OK",
         "about_version_label": "Version",
