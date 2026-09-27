@@ -1,12 +1,8 @@
-"""Floating clipboard history card (glassmorphism).
-
-A frameless Qt.Tool window that floats above other windows. Shows the
-clipboard history list with per-item copy/delete, a clear-all button, a
-connection-status line, and is draggable by its header. It is registered
-as a "family window" so interacting with it does NOT make the capsule收起.
-
-Position: appears near the cursor on first show (clamped to screen), then
-persists across drags (emitted via `position_changed`).
+"""
+剪贴板面板
+浮动剪贴板历史卡片，支持复制、删除与连接状态
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
 """
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,

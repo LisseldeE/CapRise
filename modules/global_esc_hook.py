@@ -1,16 +1,8 @@
-"""Global low-level ESC hook (WH_KEYBOARD_LL) for the main capsule bar.
-
-The capsule bar must stay non-activating (WS_EX_NOACTIVATE +
-WA_ShowWithoutActivating) so it never steals the user's caret. But that
-means a global Qt nativeEventFilter ESC (CapsuleNativeFilter) only fires
-while a CapRise window holds the foreground — when just the capsule bar is
-up, the user's focus is still in some other app and ESC goes there instead,
-so the bar never hides.
-
-A WH_KEYBOARD_LL hook receives every key on the system *before* the target
-window, regardless of focus — exactly how GlobalMouseHook already receives
-every mouse-down. We mirror that pattern: on ESC keydown, if any family
-window is visible (and no modal is up), collapse the whole family.
+"""
+全局 ESC 钩子
+低层键盘钩子监听 ESC 以收起家族窗口
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
 """
 import ctypes
 from ctypes import wintypes, CFUNCTYPE

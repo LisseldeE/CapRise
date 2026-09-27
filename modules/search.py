@@ -1,17 +1,8 @@
-"""Global search window (spotlight-style).
-
-A floating search card with an input box, three scope toggles (全局文件 /
-安装软件 / 系统内容) and a results card. Safe calculation results and
-matches against installed apps (read from the registry Uninstall keys in the
-background) are both inline; the "全局文件" scope is backed by the Everything
-(ET) software through its bundled es.exe command-line tool, and the
-"系统内容" scope matches Windows settings pages (ms-settings: URIs) plus
-CapRise's own settings pages.
-
-The window is a "family window" (registered with FamilyWindowRegistry) so
-clicking inside it never collapses the family. ESC / outside-click / Enter
-all funnel through CapRiseApp which hides the family, so closing the search
-card also brings the capsule back.
+"""
+全局搜索
+聚光灯式搜索窗口，支持文件/软件/系统内容
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
 """
 import ast
 import math
@@ -910,7 +901,10 @@ class ToggleSwitch(QAbstractButton):
         p.setRenderHint(QPainter.Antialiasing)
         track_w, track_h = 34, 18
         track_y = (self.height() - track_h) / 2.0
-        accent = QApplication.palette().color(QPalette.Highlight)
+        # 开关固定用蓝色（全局强调色已改为中性灰），暗色主题下提亮以免发闷。
+        accent = QColor(47, 111, 235)
+        if QApplication.palette().color(QPalette.Window).lightness() < 128:
+            accent = accent.lighter(125)
         off = QApplication.palette().color(QPalette.Mid)
         p.setPen(Qt.NoPen)
         p.setBrush(_blend(off, accent, self._t))
@@ -989,8 +983,8 @@ class ResultRow(QWidget):
 
     def _apply_style(self):
         if self._selected:
-            title = "#ffffff"
-            sub = "rgba(255,255,255,190)"
+            title = "palette(highlighted-text)"
+            sub = "palette(highlighted-text)"
         else:
             title = "palette(highlight)" if self._title_accent else "palette(text)"
             sub = "palette(placeholder-text)"

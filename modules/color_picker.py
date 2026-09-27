@@ -1,11 +1,8 @@
-"""Full-screen eyedropper color picker.
-
-Launched from the capsule: it hides the capsule, freezes a desktop snapshot,
-and covers the screen with a picker overlay. A draggable glass card shows the
-color under the cursor in real time (HEX / RGB / HSL) and offers one-click
-copy. Left-click samples the hovered pixel (copies its HEX and stays in the
-mode for continuous sampling); right-click or ESC exits and restores the
-capsule.
+"""
+取色器
+全屏吸管取色工具，实时显示 HEX/RGB/HSL
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
 """
 from PySide6.QtWidgets import (
     QWidget, QLabel, QHBoxLayout, QVBoxLayout, QApplication

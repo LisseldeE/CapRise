@@ -1,3 +1,9 @@
+"""
+图标库
+内置 SVG 图标常量集合
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
+"""
 # SVG icons - hardcoded, no external downloads needed
 # All icons use viewBox="0 0 24 24", stroke="currentColor" for theme compatibility
 
@@ -170,6 +176,25 @@ ICON_PICKER = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fil
   <path d="m15 6 3.4-3.4a2.1 2.1 0 1 1 3 3L18 9l.4.4a2.1 2.1 0 1 1-3 3l-3.8-3.8a2.1 2.1 0 1 1 3-3l.4.4Z"/>
 </svg>"""
 
+# --- Music capsule icons (SMTC playback control) ---
+
+# Beamed quaver: doubles as the fallback badge when a track has no artwork.
+ICON_MUSIC = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M9 18V5l11-2v13"/>
+  <circle cx="6" cy="18" r="3"/>
+  <circle cx="17" cy="16" r="3"/>
+</svg>"""
+
+ICON_PREV = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M19 19V5l-11 7z"/>
+  <line x1="6" y1="5" x2="6" y2="19"/>
+</svg>"""
+
+ICON_NEXT = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M5 5v14l11-7z"/>
+  <line x1="18" y1="5" x2="18" y2="19"/>
+</svg>"""
+
 
 def icon_svg(name):
     icons = {
@@ -196,5 +221,8 @@ def icon_svg(name):
         "rotate_ccw": ICON_ROTATE_CCW,
         "pause": ICON_PAUSE,
         "play": ICON_PLAY,
+        "music": ICON_MUSIC,
+        "prev": ICON_PREV,
+        "next": ICON_NEXT,
     }
     return icons.get(name)

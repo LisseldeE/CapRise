@@ -1,9 +1,8 @@
-"""About page and check-for-update logic for CapRise.
-
-The update check fetches the latest version from a plain-text file hosted on
-GitHub Pages (Config.UPDATE_URL), which avoids the Gitee/GitHub raw hotlink
-bans and the public-API rate limits of the previous GitHub/Gitee pick-by-
-language approach. It then compares that version against the local one.
+"""
+关于页
+关于页面与检查更新逻辑
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
 """
 import re
 import urllib.request
@@ -239,10 +238,12 @@ class AboutPage(QWidget):
             btn_min = btn_fm.horizontalAdvance(
                 I18n.tr("about_check_update")) + 32
             check_btn.setFixedSize(max(links_width, btn_min), 34)
+            # 主操作按钮沿用蓝色（同开关 / 对话框确认键），与灰化的强调色区分。
             check_btn.setStyleSheet(
-                f"QPushButton {{ background: {_accent_hex()}; color: white;"
-                f" border: none; border-radius: 8px; font-size: 13px; }}"
-                f"QPushButton:hover {{ opacity: .9; }}")
+                "QPushButton { background: #2f6feb; color: #ffffff;"
+                " border: none; border-radius: 8px; font-size: 13px; }"
+                "QPushButton:hover { background: #3f7bf0; }"
+                "QPushButton:pressed { background: #275fd4; }")
             check_btn.clicked.connect(
                 lambda: check_update(self.window()))
             layout.addWidget(check_btn, alignment=Qt.AlignLeft)

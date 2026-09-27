@@ -1,12 +1,8 @@
-"""Global hotkey management for CapRise.
-
-Multiple Win32 global hotkeys (RegisterHotKey) are managed by id. Qt key
-sequences entered in the settings page are converted to Win32 MOD_*/VK_*
-values, and every WM_HOTKEY message is dispatched to the callback bound to
-its hotkey id.
-
-Hotkey values are persisted in config.json as portable QKeySequence text
-(e.g. "Ctrl+`"); an empty string means "no hotkey".
+"""
+全局快捷键
+Win32 全局热键的注册、转换与消息分发
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
 """
 import ctypes
 from ctypes import wintypes

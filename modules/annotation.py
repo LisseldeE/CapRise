@@ -1,3 +1,9 @@
+"""
+标注工具
+截图区域标注的绘制工具条
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
+"""
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QTextEdit, QApplication, QGraphicsDropShadowEffect,
     QPushButton, QFrame

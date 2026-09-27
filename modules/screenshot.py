@@ -1,3 +1,9 @@
+"""
+截屏
+区域选择截屏浮层与预览对话框
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
+"""
 from PySide6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout,
     QDialog, QFileDialog, QApplication

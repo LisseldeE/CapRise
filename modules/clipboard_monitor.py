@@ -1,16 +1,8 @@
-"""System clipboard monitor with echo-guard against sync loops.
-
-Local copy  -> emits `copied(text)` so the manager can sync to peers.
-Remote write -> manager calls `set_clipboard(text)` which sets the system
-                clipboard WITHOUT re-emitting (so we don't echo our own
-                just-received text back to the network).
-
-QClipboard.dataChanged is emitted synchronously from setText() on Windows
-(Qt auto-connection same-thread = direct call), so a simple boolean guard
-cleared inside the handler is sufficient. We emit IMMEDIATELY on dataChanged
-(no debounce timer) so the panel updates the instant the user copies; burst
-writes (text/html/inline variants of the same copy) are deduped by the
-manager via a last-text check.
+"""
+剪贴板监控
+监控系统剪贴板并做回声防护，避免同步循环
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
 """
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QObject, Signal

@@ -1,9 +1,9 @@
-"""Settings dialog for CapRise.
-
-Split-pane layout: a left navigation column lets the user switch between the
-General / Translate / System / About sub-cards, and the right pane shows the
-settings for the selected section (task 4). The About page also carries the
-check-for-update logic (task 5)."""
+"""
+设置面板
+分栏设置对话框，含通用/翻译/系统/关于页
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
+"""
 import sys
 import os
 import time
@@ -560,7 +560,7 @@ class _Sidebar(QListWidget):
             QListWidget::item:hover {{ background: rgba(128,128,128,45); }}
             QListWidget::item:selected {{
                 background: {_accent_hex()};
-                color: #ffffff;
+                color: {self._on_accent()};
             }}
         """)
         if self.count() > 0:
@@ -568,6 +568,10 @@ class _Sidebar(QListWidget):
 
     def _fg(self):
         c = QApplication.palette().color(QPalette.WindowText)
+        return f"#{c.red():02x}{c.green():02x}{c.blue():02x}"
+
+    def _on_accent(self):
+        c = QApplication.palette().color(QPalette.HighlightedText)
         return f"#{c.red():02x}{c.green():02x}{c.blue():02x}"
 
 
@@ -770,6 +774,7 @@ class SettingsDialog(QDialog):
         # initial population does not trigger redundant saves.
         self.lang_combo.currentIndexChanged.connect(self._persist)
         self.autostart_check.toggled.connect(self._persist)
+        self.music_check.toggled.connect(self._on_music_toggled)
         self.translate_provider_combo.currentIndexChanged.connect(self._persist)
         self.translate_source_combo.currentIndexChanged.connect(self._persist)
         self.translate_target_combo.currentIndexChanged.connect(self._persist)
@@ -802,6 +807,13 @@ class SettingsDialog(QDialog):
         mode = "dynamic" if self.anim_dynamic.isChecked() else "vertical"
         Config().set("capsule_anim", mode)
         self._anim_preview.set_mode(mode)
+
+    def _on_music_toggled(self, checked):
+        """Music capsule switch: apply live (starts/stops the SMTC poller)."""
+        if self._capsule is not None:
+            self._capsule.set_music_enabled(checked)
+        else:
+            Config().set("music_capsule_enabled", bool(checked))
 
     def setup_ui(self):
         outer = QHBoxLayout(self)
@@ -1259,6 +1271,13 @@ class SettingsDialog(QDialog):
         row.addStretch()
         layout.addLayout(row)
 
+        self.music_check = QCheckBox()
+        layout.addLayout(self._row(I18n.tr("music_capsule"), self.music_check))
+        music_hint = QLabel(I18n.tr("music_capsule_hint"))
+        music_hint.setWordWrap(True)
+        music_hint.setStyleSheet("font-size: 11px; color: #868e96;")
+        layout.addWidget(music_hint)
+
         layout.addStretch()
         return page
 
@@ -1273,6 +1292,9 @@ class SettingsDialog(QDialog):
 
         autostart = config.get("autostart", False)
         self.autostart_check.setChecked(autostart)
+
+        self.music_check.setChecked(
+            bool(config.get("music_capsule_enabled", True)))
 
         provider = config.get("translate_source", "edge")
         index = self.translate_provider_combo.findData(provider)

@@ -1,13 +1,8 @@
-"""Shared visual helpers for the floating toolbars.
-
-The capsule bar and the annotation sub-bar are siblings in the same window
-"family", so they share one look: a rounded "pill" background with a subtle
-vertical gradient (Qt decides the colours from the system palette), the
-family hairline border (#505050, same as the clipboard panel), and smooth
-animated icon buttons (translucent light-blue highlight on hover/press, a
-persistent lit state for toggles, and a 1 px press-down from the reference
-AnimatedButton pattern). Keeping this in one module guarantees the two bars
-stay visually consistent.
+"""
+通用控件
+浮动工具条的玻璃拟态绘制与动画图标按钮
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
 """
 from PySide6.QtCore import (
     Qt, QByteArray, QRectF, QPointF, QEvent, QVariantAnimation, QEasingCurve,
@@ -176,12 +171,11 @@ class GlassIconButton(QPushButton):
         if value is not None:
             self._t = float(value)
         if self._active:
-            # Stable plate: fixed accent plate, but the icon keeps its
-            # original "window text" color (white in dark / black in light).
-            # A blue icon on the blue plate would be invisible, so selected
-            # modes must keep high contrast against the lit background.
+            # Stable plate: fixed accent plate, icon flips to the on-accent ink
+            # so it stays readable on both themes.
             self._alpha = self.ACTIVE_ALPHA
-            self._icon_color = self._normal
+            self._icon_color = QApplication.palette().color(
+                QPalette.HighlightedText)
         else:
             self._alpha = int(self.HOVER_ALPHA * self._t)
             if self._colorize_icon:

@@ -1,14 +1,8 @@
-"""Single-instance guard + IPC "poke".
-
-CapRise is a tray + global-hotkey desktop tool. Running more than one
-instance causes duplicate tray icons, failed global-hotkey registration,
-and conflicting clipboard / LAN-sync listeners. The first instance owns a
-QLocalServer on a fixed name; a later launch probes that socket:
-  - if a live instance is listening -> we must yield: ask it to show the
-    capsule, then exit quietly;
-  - otherwise we take over, clearing any stale socket name left by a crash
-    (the OS releases the underlying handle when a process dies, so a
-    rerun can always re-bind).
+"""
+单实例
+单实例守卫与进程间“唤起”通讯
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
 """
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtNetwork import QLocalServer, QLocalSocket

@@ -1,19 +1,8 @@
-"""Send keystrokes to the foreground window via Windows SendInput.
-
-Used by the clipboard panel's copy-on-click: since the panel never steals
-focus (WS_EX_NOACTIVATE), the foreground stays on the user's original input
-window, so a synthesized Ctrl+V pastes at their caret.
-
-Why SendInput (not keybd_event / PostMessage):
-  - SendInput is the modern, reliable API; keybd_event is deprecated.
-  - PostMessage(WM_PASTE) only works for EDIT/RICHEDIT controls and silently
-    fails in modern apps (browsers, Electron, Office ribbon, …).
-  - SendInput drives the real input stream — works everywhere a physical
-    Ctrl+V would.
-
-Layout of INPUT/KEYBDINPUT matches the Windows SDK exactly; ctypes unions
-must mirror the C union size so the array stride is correct (4 events * 40
-bytes on x64).
+"""
+按键注入
+通过 Windows SendInput 向前台窗口发送 Ctrl+V
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
 """
 import ctypes
 from ctypes import wintypes

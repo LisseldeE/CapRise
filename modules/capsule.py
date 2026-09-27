@@ -1,3 +1,9 @@
+"""
+胶囊栏
+主胶囊栏窗口，承载各功能入口并管理家族窗口显示
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
+"""
 from ctypes import wintypes
 from PySide6.QtWidgets import (
     QWidget, QGraphicsDropShadowEffect, QApplication
@@ -21,6 +27,7 @@ from modules.global_esc_hook import GlobalEscapeHook
 from modules.widgets import GlassIconButton, paint_pill
 from modules.config import Config
 from modules.timer import TimerDisplay, TimerManager, TimerNoticeOverlay
+from modules.music import MusicManager, MusicCapsule
 
 # Windows constants
 WM_KEYDOWN = 0x0100
@@ -76,6 +83,9 @@ class CapsuleBar(QWidget):
     BTN = 44
     SPACING = 10
 
+    # Gap between the main capsule's left edge and the music capsule.
+    MUSIC_GAP = 14
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowFlags(
@@ -88,6 +98,12 @@ class CapsuleBar(QWidget):
 
         self._animating = False
         self._pending_hide = False
+        # Final resting position while a show/hide animation is in flight, so
+        # the music capsule can be parked beside where the bar will END up
+        # rather than where it currently is mid-flight.
+        self._final_pos = None
+        # Declared up front: _recenter() consults it and runs during setup.
+        self._music_enabled = False
         self.setup_ui()
         self.setup_animations()
         self.setup_shadow()
@@ -208,6 +224,17 @@ class CapsuleBar(QWidget):
         # fits its tool cluster with full inter-button gaps.
         self._layout_manual(0)
 
+        # --- music capsule ---
+        # Separate top-level pill parked to the LEFT of this bar while a
+        # media session is live. Owned here (the family anchor) so it can
+        # mirror the bar's show/hide animations and stay glued to its edge.
+        self.music = MusicManager(self)
+        self.music_capsule = MusicCapsule(self.music)
+        self.music.state_changed.connect(self._on_music_state)
+        self._music_enabled = bool(Config().get("music_capsule_enabled", True))
+        if self._music_enabled:
+            self.music.start()
+
     # ----- timer strip -----
 
     def _expand_timer_strip(self):
@@ -230,10 +257,89 @@ class CapsuleBar(QWidget):
         curtain closes smoothly; at extent 0 it is removed entirely."""
         self._animate_timer_extent(0.0)
 
+    def _resting_x(self, screen=None):
+        """Left edge for the bar so that the WHOLE group (music + bar) is
+        centred on screen, not just the bar.
+
+        With the music capsule attached, the bar sits half of the music
+        footprint right of centre — that pushes the combined block back to a
+        true centre. `_music_shift` is that half-footprint, animated 0..1."""
+        if screen is None:
+            screen = self._get_screen_geo()
+        cx = (screen.width() - self.width()) // 2 + screen.x()
+        if self._music_shift > 0.0:
+            cx += int(round(self._music_shift * self._music_footprint() / 2))
+        return cx
+
     def _recenter(self):
-        """Re-center horizontally on the current screen, keeping the Y."""
-        screen = self._get_screen_geo()
-        self.move((screen.width() - self.width()) // 2 + screen.x(), self.y())
+        """Re-center the group horizontally on the current screen, keeping Y."""
+        self.move(self._resting_x(), self.y())
+        # Width changes (timer strip, hidden tools) shift the left edge — keep
+        # an in-flight _final_pos in step so the music capsule follows.
+        if self._final_pos is not None:
+            self._final_pos.setX(self.x())
+        self._sync_music_target()
+
+    # ----- music capsule -----
+
+    def _sync_music_target(self):
+        """Park the music capsule immediately left of the bar's resting pose.
+
+        While the bar is animating, `_final_pos` holds where it will settle —
+        using the current (mid-flight, off-screen) y would leave the music
+        capsule stranded above the desktop when the animation ends.
+        """
+        if not self._music_enabled:
+            return
+        y = self._final_pos.y() if self._final_pos is not None else self.y()
+        self.music_capsule.attach_to(
+            self.x() - self.music_capsule.width() - self.MUSIC_GAP, y)
+
+    def _music_ready(self):
+        return self._music_enabled and self.music_capsule.has_track()
+
+    def _on_music_state(self, state):
+        """Media session changed: show / hide (or refresh) the music capsule.
+
+        A track starting while the bar is hidden does NOT summon the family —
+        the capsule only ever appears alongside the bar, like the timer strip.
+        """
+        if state is None or not self._music_enabled:
+            if self.music_capsule.isVisible():
+                self.music_capsule.hide_animated(self._anim_mode())
+            # Give the bar its half of the screen back as the pill leaves, so
+            # the group stays centred throughout the transition.
+            self._set_music_shift_to(0.0, animate=True)
+            return
+        if self.isVisible():
+            # Slide the bar right FIRST so the pill lands at a position the
+            # group-wide centering already accounts for.
+            self._set_music_shift_to(1.0, animate=True)
+            self._sync_music_target()
+            self.music_capsule.show_animated(self._anim_mode())
+        else:
+            # Hidden: record the offset silently so the next show comes up
+            # already centred instead of sliding on screen.
+            self._set_music_shift_to(1.0, animate=False)
+
+    def set_music_enabled(self, enabled):
+        """Toggle the whole music feature (settings switch) and persist it.
+
+        Disabling stops the SMTC poll thread outright — no background work
+        runs while the feature is off."""
+        enabled = bool(enabled)
+        self._music_enabled = enabled
+        Config().set("music_capsule_enabled", enabled)
+        if enabled:
+            self.music.start()
+            if self.isVisible() and self.music_capsule.has_track():
+                self._set_music_shift_to(1.0, animate=True)
+                self._sync_music_target()
+                self.music_capsule.show_animated(self._anim_mode())
+        else:
+            self.music.stop()
+            self.music_capsule.hide_immediately()
+            self._set_music_shift_to(0.0, animate=True)
 
     def _refresh_timer_display(self, *_):
         phase = self.timer.phase()
@@ -374,6 +480,52 @@ class CapsuleBar(QWidget):
         self._expand_anim.setDuration(300)
         self._expand_anim.setEasingCurve(QEasingCurve.OutCubic)
         self._expand_anim.finished.connect(self._on_anim_finished)
+
+        # 0..1 share of the music capsule's footprint that the bar has moved
+        # right by, so that MUSIC + main read as one centred group instead of
+        # an off-centre block. Animated rather than snapped: when the music
+        # capsule appears or leaves while the bar is on screen, a jump of
+        # half the pill's width would be very visible.
+        self._music_shift = 0.0
+        self._shift_anim = QPropertyAnimation(self, b"musicShift")
+        self._shift_anim.setDuration(300)
+        self._shift_anim.setEasingCurve(QEasingCurve.OutCubic)
+
+    # ----- music capsule group offset -----
+
+    def _get_music_shift(self):
+        return self._music_shift
+
+    def _set_music_shift(self, p):
+        self._music_shift = float(p)
+        # If the bar is still flying in, its pos animation owns x and would
+        # drag the window back to the pre-shift resting spot; retarget the
+        # flight so it lands where the group centring now wants it.
+        if self._animating and not self._pending_hide:
+            end = self.pos_anim.endValue()
+            if end is not None:
+                self.pos_anim.setEndValue(
+                    QPoint(self._resting_x(), end.y()))
+        self._recenter()
+
+    musicShift = Property(float, _get_music_shift, _set_music_shift)
+
+    def _music_footprint(self):
+        """Horizontal space the music capsule occupies, gap included."""
+        return self.music_capsule.width() + self.MUSIC_GAP
+
+    def _set_music_shift_to(self, target, animate=True):
+        target = 1.0 if target else 0.0
+        if not animate or not self.isVisible():
+            self._shift_anim.stop()
+            self._set_music_shift(target)
+            return
+        if abs(self._music_shift - target) < 0.001:
+            return
+        self._shift_anim.stop()
+        self._shift_anim.setStartValue(self._music_shift)
+        self._shift_anim.setEndValue(target)
+        self._shift_anim.start()
 
     # ----- timer strip expand / collapse -----
 
@@ -601,6 +753,10 @@ class CapsuleBar(QWidget):
         self._mouse_hook.uninstall()
         self._esc_hook.uninstall()
         self.timer.shutdown()
+        self.music.stop()
+        self.music_capsule.hide_immediately()
+        FamilyWindowRegistry.remove(self.music_capsule)
+        self.music_capsule.close()
 
     def event(self, event):
         """ESC key when the capsule itself has keyboard focus."""
@@ -619,6 +775,11 @@ class CapsuleBar(QWidget):
         self.clearMask()
         self.setWindowOpacity(1.0)
         self._set_buttons_reveal(1.0)
+        # Safety net: whatever path hid the bar (animation end, immediate
+        # hide), the music capsule must never outlive it on screen.
+        self._final_pos = None
+        self._shift_anim.stop()
+        self.music_capsule.hide_immediately()
         # Hiding never delivers a leaveEvent, so a hovered button keeps its
         # lit `_t`; clear it here so the highlight can't linger on re-show.
         for b in self._toolbar:
@@ -652,8 +813,16 @@ class CapsuleBar(QWidget):
         self._animating = True
         self._pending_hide = False
         screen = self._get_screen_geo()
-        target_x = (screen.width() - self.width()) // 2 + screen.x()
+        music_show = self._music_ready()
+        # Settle the group offset before measuring, so the bar comes up already
+        # centred on the group (no sideways slide during the reveal).
+        self._set_music_shift_to(1.0 if music_show else 0.0, animate=False)
+        target_x = self._resting_x(screen)
         target_y = screen.y() + 30
+        # Park the music capsule beside the bar's FINAL pose and mirror the
+        # same animation, so the two fly in as one unit.
+        self._final_pos = QPoint(int(target_x), int(target_y))
+        self._sync_music_target()
 
         # Dynamic (left-right) mode parks the window at its final geometry and
         # grows a centre-anchored mask out to both sides. Reverses cleanly
@@ -673,6 +842,8 @@ class CapsuleBar(QWidget):
             self._expand_anim.setStartValue(self._dynamic_expand)
             self._expand_anim.setEndValue(1.0)
             self._expand_anim.start()
+            if music_show:
+                self.music_capsule.show_animated("dynamic")
             return
 
         if first_show:
@@ -697,6 +868,8 @@ class CapsuleBar(QWidget):
         self.opacity_anim.setEndValue(1.0)
         self.pos_anim.start()
         self.opacity_anim.start()
+        if music_show:
+            self.music_capsule.show_animated("vertical")
 
     def hide_capsule(self):
         """Hide the capsule, interrupting any in-progress show animation by
@@ -707,9 +880,13 @@ class CapsuleBar(QWidget):
 
         self._animating = True
         self._pending_hide = True
+        self._final_pos = None
         # Collapse is the natural reset point: force every button back to its
         # idle state so a hovered highlight can't survive into the next show.
         self._reset_buttons_hover()
+        # The music capsule rides along — same duration / easing, so the two
+        # leave the screen together.
+        self.music_capsule.hide_animated(self._anim_mode())
 
         # Dynamic mode: close the centre-anchored mask back to a pill while fading
         # out in parallel, so no clipped content is left visible at the final
@@ -740,8 +917,10 @@ class CapsuleBar(QWidget):
     def hide_immediately(self):
         self._animating = False
         self._pending_hide = False
+        self._final_pos = None
         self.pos_anim.stop()
         self.opacity_anim.stop()
+        self.music_capsule.hide_immediately()
         self.hide()
 
     def toggle_visibility(self):

@@ -1,15 +1,8 @@
-"""Pomodoro / countdown timer: logic manager + capsule strip + setup dialog.
-
-The timer is a compact side feature of the capsule. Clicking the timer
-button opens a small dialog to configure a pomodoro cycle (focus/break) or a
-plain countdown. While a timer runs, the capsule extends a strip to its left
-showing the remaining time as HH:MM:SS (constant-width monospace). The strip
-is laid out with the time text on the left and a small vertical column of
-controls on the right (reset on top, stop below) so nothing overlaps; the
-time text itself is clickable to pause/resume. The strip sits on the same
-glass plate as the capsule, separated from the tool cluster by a hairline
-divider. When a countdown finishes, an independent glass notice card pops up
-on screen (even if the capsule is hidden).
+"""
+计时器
+番茄钟与倒计时管理器、胶囊计时条及设置对话框
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
 """
 import math
 import time

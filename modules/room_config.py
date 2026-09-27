@@ -1,8 +1,8 @@
-"""Room configuration dialog with a 6-digit code input.
-
-The 6-cell input widget (auto-advance, backspace-to-previous, paste-6-digits)
-is adapted from the sibling LANSyncBox project per the PRD. The dialog is a
-"family window" so opening it does NOT make the capsule收起.
+"""
+房间配置
+六位房间码输入对话框
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
 """
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,

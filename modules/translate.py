@@ -1,15 +1,8 @@
-"""Region-select translation.
-
-Flow: full-screen dark overlay -> drag to select a rectangular region ->
-OCR (Windows built-in engine via WinRT) + online translation (Google's free
-endpoint, no API key) run in a background daemon thread. A rounded card fades
-in below the selection: it first plays the state-1 scanning animation
-(theme-aware), then resizes to show only the translated result with a copy
-icon pinned to its top-right corner.
-
-The network/OCR work runs in a plain daemon thread and delivers results to the
-Qt main thread through a QObject signal bridge — the same pattern used by
-clipboard_network.py, so no QThread lifecycle management is required.
+"""
+翻译
+框选区域 OCR 识别与在线翻译
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
 """
 import json
 import threading
@@ -444,11 +437,15 @@ class TranslateResultPanel(QWidget):
         c = QApplication.palette().color(QPalette.Highlight)
         return f"rgba({c.red()}, {c.green()}, {c.blue()}, {alpha})"
 
+    def _on_accent(self):
+        c = QApplication.palette().color(QPalette.HighlightedText)
+        return f"#{c.red():02x}{c.green():02x}{c.blue():02x}"
+
     def _btn_style(self):
         return f"""
             QPushButton {{
                 background-color: {self._accent_rgba(230)};
-                color: white;
+                color: {self._on_accent()};
                 border: none;
                 border-radius: 6px;
                 padding: 6px 18px;

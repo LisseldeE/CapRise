@@ -1,23 +1,8 @@
-"""Global low-level mouse hook (WH_MOUSE_LL).
-
-Replaces the previous foreground-window poll for hide-on-outside-click.
-The OS delivers every mouse-down on the screen to this hook *before* the
-target window sees it, so we can reliably detect a click anywhere — other
-apps, the desktop, the taskbar, the tray — not just inside the Qt app.
-
-Design notes
-------------
-* The hook callback runs synchronously on the thread that installed it
-  (and pumps messages) — which is the Qt main thread. Qt signal emit and
-  QApplication.activeModalWidget() are therefore safe to call directly.
-* Low-level hooks have a strict timeout (LowLevelHooksTimeout, default
-  ~300ms); the hook only does a few GetWindowRect calls + an optional
-  Qt signal emit, so it stays well under 1ms.
-* The CFUNCTYPE callback MUST be kept alive by a strong reference, or the
-  GC will free it and Windows will crash the process on the next event.
-* Modal dialogs (e.g. RoomConfigDialog) are skipped: Windows already
-  denies outside clicks on a modal dialog (deny sound + dialog flash),
-  and hiding the family mid-modal would strand the dialog.
+"""
+全局鼠标钩子
+低层鼠标钩子，用于检测点击外部以隐藏胶囊
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
 """
 import ctypes
 from ctypes import wintypes, CFUNCTYPE

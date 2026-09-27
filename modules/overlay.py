@@ -1,3 +1,9 @@
+"""
+覆盖层基类
+全屏覆盖层基类与 HiDPI 像素绘制辅助
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
+"""
 from PySide6.QtWidgets import QWidget
 from PySide6.QtCore import Qt, Signal, QRect
 from PySide6.QtGui import QPainter, QColor, QGuiApplication

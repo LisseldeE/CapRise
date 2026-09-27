@@ -1,23 +1,8 @@
-"""LAN clipboard networking: framing protocol + UDP discovery + TCP relay.
-
-Topology (matches LANSyncBox model): one peer acts as HOST — it runs a TCP
-server and a UDP discovery responder. Other peers JOIN — they discover the
-host via UDP broadcast and connect to it as TCP clients. The host relays
-clipboard updates between all clients (star topology), so a joiner only
-talks to the host, which forwards to every other joiner.
-
-All socket I/O runs in daemon threads. Results are delivered to the Qt main
-thread via Qt signals (auto-queued across threads).
-
-Message framing: 4-byte big-endian length prefix + UTF-8 JSON payload.
-Message types:
-  hello       joiner -> host   {type, room_code, peer_id, peer_name}
-  welcome     host  -> joiner  {type, peer_id, peer_count}
-  clipboard   either -> host / host -> all   {type, text, origin_peer_id}
-  peer_update host  -> all     {type, peer_count}
-  bye         joiner -> host   {type}
-  probe       joiner -> host   {type, room_code}            (TCP subnet probe)
-  probe_resp  host  -> joiner  {type, room_code, tcp_port}  (lightweight, no peer registered)
+"""
+剪贴板网络
+局域网 UDP 发现与 TCP 中转（星型拓扑）
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
 """
 import concurrent.futures
 import json

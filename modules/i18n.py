@@ -1,3 +1,9 @@
+"""
+多语言
+中英文界面文案与语言切换
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
+"""
 import locale
 from modules.config import Config
 
@@ -150,6 +156,13 @@ TRANSLATIONS = {
         "animation_vertical": "上下飞入",
         "animation_dynamic": "左右展开",
         "animation_preview_hint": "点击选项切换动画效果，修改后立即生效",
+        # Music capsule (SMTC now-playing)
+        "music_capsule": "音乐胶囊",
+        "music_capsule_hint": "检测到系统正在播放音乐时，在胶囊栏左侧显示歌曲信息与控制按钮。仅支持已接入系统媒体控制的播放器。",
+        "music_prev": "上一曲",
+        "music_play": "播放",
+        "music_pause": "暂停",
+        "music_next": "下一曲",
         # About / check for update
         "ok": "确定",
         "about_version_label": "版本",
@@ -314,6 +327,13 @@ TRANSLATIONS = {
         "animation_vertical": "Vertical Fly-in",
         "animation_dynamic": "Left-Right Expand",
         "animation_preview_hint": "Click an option to switch the animation; takes effect immediately",
+        # Music capsule (SMTC now-playing)
+        "music_capsule": "Music Capsule",
+        "music_capsule_hint": "Shows the current track and playback controls to the left of the capsule bar while a media session is playing. Only players that support Windows system media controls are detected.",
+        "music_prev": "Previous",
+        "music_play": "Play",
+        "music_pause": "Pause",
+        "music_next": "Next",
         # About / check for update
         "ok": "OK",
         "about_version_label": "Version",

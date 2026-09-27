@@ -1,13 +1,8 @@
-"""Clipboard feature coordinator.
-
-Ties together discovery, network (host/client), the system-clipboard
-monitor, the SQLite history, and the floating panel. Owns the lifecycle:
-enable/disable, room config, host-vs-join auto-selection, and state
-persistence (enabled / expanded / room / panel position) across restarts.
-
-Role selection (per PRD): after a room code is entered, scan the LAN via UDP.
-If a host for that room responds -> join as a TCP client. Otherwise -> become
-the host (start a TCP server + UDP discovery responder).
+"""
+剪贴板协调器
+统筹剪贴板发现、网络、监控、历史与浮动面板
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
 """
 import socket
 import uuid

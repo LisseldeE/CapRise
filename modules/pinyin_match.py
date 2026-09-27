@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Fuzzy / pinyin-aware matching for CapRise search.
-
-Lets a query like "weix" match the Chinese name "微信" through its full pinyin
-("weixin") — and "wx" match it through the initials. Conversion results are
-cached so the one-time cost of pypinyin's dictionary load + conversion is paid
-once instead of on every keystroke. pypinyin is imported lazily; if it is ever
-missing the module degrades to plain substring matching."""
+"""
+拼音匹配
+搜索的拼音全拼与首字母模糊匹配
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
+"""
 import re
 import threading
 

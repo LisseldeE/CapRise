@@ -1,14 +1,8 @@
-"""Family window registry for focus-aware hide behavior.
-
-The capsule auto-hides when focus leaves it (click outside, alt-tab, etc.).
-But some windows are "family" — visual extensions of the capsule such as
-the clipboard panel and the room-config dialog. Focus moving to a family
-window must NOT trigger a hide.
-
-This module is a process-wide singleton so any widget can register itself
-and the capsule's hide logic (nativeEvent / eventFilter / poll) can consult
-it without explicit wiring. Weak refs are used so destroyed widgets don't
-linger in the registry.
+"""
+家族窗口
+家族窗口注册表，避免扩展窗口触发胶囊收起
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
 """
 import weakref
 

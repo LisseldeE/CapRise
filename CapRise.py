@@ -1,12 +1,14 @@
 """
-CapRise - PySide6 quick tool launcher
-Main entry point: Ctrl+` to call, capsule UI with multiple tools
+CapRise - 胶囊快捷工具栏
+程序入口：Ctrl+` 唤起，胶囊栏聚合多个工具
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
 """
 import sys
 import os
 import ctypes
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
-from PySide6.QtGui import QIcon, QKeySequence
+from PySide6.QtGui import QIcon, QKeySequence, QPalette, QColor
 from PySide6.QtCore import Qt
 from modules.single_instance import SingleInstance, poke_existing_instance
 from modules.config import Config
@@ -36,6 +38,18 @@ def set_app_user_model_id():
             "LisseldeE.CapRise.Version")
     except Exception:
         pass
+
+
+def apply_neutral_accent(app):
+    """用中性浅灰替换系统强调蓝，作为全局悬停/焦点/选中色。"""
+    pal = app.palette()
+    if pal.color(QPalette.Window).lightness() < 128:
+        accent, ink = QColor(198, 203, 210), QColor(26, 28, 32)
+    else:
+        accent, ink = QColor(111, 117, 126), QColor(255, 255, 255)
+    pal.setColor(QPalette.Highlight, accent)
+    pal.setColor(QPalette.HighlightedText, ink)
+    app.setPalette(pal)
 
 
 def load_app_icon():
@@ -92,6 +106,8 @@ class CapRiseApp:
         self.app.setQuitOnLastWindowClosed(False)
         self.app.setApplicationName("CapRise")
         self.app.setWindowIcon(load_app_icon())
+        # Must run before any widget is built so cached accent colours follow.
+        apply_neutral_accent(self.app)
 
         Config()
         I18n.get_language()

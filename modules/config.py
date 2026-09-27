@@ -1,3 +1,9 @@
+"""
+配置管理
+应用信息与配置读写单例
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
+"""
 import json
 from pathlib import Path
 
@@ -7,7 +13,7 @@ class Config:
 
     # --- App info (used by the About page / check-for-update) ---
     APP_NAME = "CapRise"
-    APP_VERSION = "1.1.6.0"
+    APP_VERSION = "1.1.7.0"
     APP_AUTHOR = "Lisselde_E"
     APP_AUTHOR_LINK = "https://lisseldee.github.io/#7"  # 项目主页链接
 

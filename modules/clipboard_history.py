@@ -1,8 +1,8 @@
-"""SQLite-backed clipboard history store (text only, per PRD).
-
-The DB lives at ~/CapRise/clipboard_history.db. Accessed only from the Qt
-main thread (the manager routes all network callbacks through signals onto
-the main thread), so no locking is required.
+"""
+剪贴板历史
+基于 SQLite 的剪贴板历史存储
+Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
+Licensed under the MIT License.
 """
 import sqlite3
 import time
