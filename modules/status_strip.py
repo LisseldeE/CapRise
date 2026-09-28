@@ -19,10 +19,11 @@ from PySide6.QtWidgets import QWidget, QApplication
 from modules.i18n import I18n
 from modules.icons import (
     ICON_MUSIC, ICON_PREV, ICON_NEXT, ICON_PAUSE, ICON_PLAY, ICON_ROTATE_CCW,
-    ICON_CLOSE, ICON_TIMER, ICON_STOP, ICON_CHECK
+    ICON_CLOSE, ICON_TIMER, ICON_STOP, ICON_CHECK, weather_icon
 )
 from modules.music import MarqueeLabel
 from modules.timer import format_hms, phase_label
+from modules.weather import condition_of, format_temp
 from modules.widgets import GlassIconButton, make_pixmap, screen_dpr
 
 RED = QColor(224, 49, 49)
@@ -728,16 +729,87 @@ class NoticeSegment(_Segment):
                    Qt.AlignVCenter | Qt.AlignLeft, text)
 
 
+class WeatherSegment(_Segment):
+    """天气片：单色天气图标 + 当前气温，恒宽。
+
+    两种形态：闲时独自展开成「图标 + 温度」的恒宽片；只要录制 / 音乐 / 倒计时
+    等状态在场，就收成 26px 的小图标（与其余状态的收起态同一档），整片不会从
+    状态条上消失。
+
+    展开宽度按「图标 + 预留 3 字符温度位」一次性算死：温度文案 9°/24°/-3° 长度
+    不定，若让片宽跟着文案走，每次刷新都会改栏宽、整条胶囊跟着抖。段本身不
+    持有计时逻辑，只从天气服务取实况。"""
+
+    ICON = 18
+    PAD = 12
+    GAP = 8
+
+    def __init__(self, service, parent=None):
+        super().__init__(parent)
+        self.svc = service
+        self._condition = "cloudy"
+        self._temp = "--"
+        self._temp_font = QFont("Consolas")
+        self._temp_font.setPixelSize(15)
+        self._temp_font.setWeight(QFont.DemiBold)
+        # 预留位：按最宽的 3 位数字 + 度数符号，文案变化不改变片宽。
+        self._slot = QFontMetricsF(self._temp_font).horizontalAdvance("-88°") + 2
+        self.setToolTip(I18n.tr("weather"))
+        self.refresh()
+
+    def has_data(self):
+        return self.svc.data() is not None
+
+    def pill_width(self):
+        """展开态恒宽：图标 + 温度预留位 + 两侧内边距。"""
+        return int(round(self.PAD * 2 + self.ICON + self.GAP + self._slot))
+
+    def refresh(self):
+        """从服务同步一次实况（数据变化 / 语言或单位切换时调用）。"""
+        data = self.svc.data()
+        if data is None:
+            return
+        self._condition = condition_of(data.get("code", 0))
+        self._temp = format_temp(data.get("temp"), self.svc.unit())
+        self.update()
+
+    def content_insets(self, w=None):
+        """收起态字形锚在 26px 盒内（可点区域就是整盒），内缩 0；展开态带 PAD
+        内边距。内缩随宽度插值，展开↔收起过渡中相邻段的内容间距才恒为 GAP_C、
+        分隔线不跳变。"""
+        t = self._expand_ratio(self.pill_width(), w)
+        return (self.PAD * t, self.PAD * t)
+
+    def _paint_collapsed(self, p):
+        pm = _glyph(weather_icon(self._condition), self._color().name(),
+                    self.ICON)
+        p.drawPixmap(QPointF((self.COLLAPSED - self.ICON) / 2.0,
+                             (self.H - self.ICON) / 2.0), pm)
+
+    def _paint_expanded(self, p):
+        c = self._color()
+        pm = _glyph(weather_icon(self._condition), c.name(), self.ICON)
+        p.drawPixmap(QPointF(self.PAD, (self.H - self.ICON) / 2.0), pm)
+        p.setPen(c)
+        p.setFont(self._temp_font)
+        p.drawText(QRectF(self.PAD + self.ICON + self.GAP, 0, self._slot,
+                          self.H),
+                   Qt.AlignVCenter | Qt.AlignLeft, self._temp)
+
+
 class StatusStrip(QWidget):
-    """胶囊栏左侧的进行中状态条（录制 | 音乐 | 倒计时）。
+    """胶囊栏左侧的状态条（录制 | 音乐 | 倒计时，闲时补位天气片）。
 
     默认展开优先级最高的进行中功能，其余收起为 26px 图标，未进行中的功能
     不占位；点击收起项互斥互换，点击当前展开项回到自动默认态。展开宽度
     统一，因此互换时整条宽度恒定。手动展开标记随该功能结束清空。
-    """
+
+    天气片单独一档：它没有「展开 / 收起 / 互换」语义，只在没有任何进行中
+    状态时补位占住左槽，点击直接展开详情卡（weather_clicked）。"""
 
     layout_changed = Signal()
     stop_record_requested = Signal()
+    weather_clicked = Signal()
 
     HEIGHT = 44
     FULL_W = 200      # 展开态统一宽度，保证互换时栏宽不变
@@ -761,10 +833,12 @@ class StatusStrip(QWidget):
     MARGIN = 15
     SWAP_MS = 260     # 互换过渡时长
     NOTICE_MS = 2600  # 完成提示就地停留多久，到点自动撤下
-    # 段的固定排列，同时也是展开优先级：录制 > 音乐 > 倒计时
-    ORDER = ("record", "music", "timer")
+    # 段的固定排列，同时也是展开优先级：录制 > 音乐 > 倒计时。
+    # 天气片挂在最后：它没有「进行中」语义，也不参与展开优先级 —— 闲时它独自
+    # 展开（图标 + 温度），一旦有进行中段就收成一个小图标，位置与状态段不冲突。
+    ORDER = ("record", "music", "timer", "weather")
 
-    def __init__(self, timer, music, parent=None):
+    def __init__(self, timer, music, weather, parent=None):
         super().__init__(parent)
         self.setFixedHeight(self.HEIGHT)
         self._manual = None
@@ -793,16 +867,23 @@ class StatusStrip(QWidget):
         self.seg_music = MusicSegment(music, self)
         self.seg_timer = TimerSegment(timer, self)
         self.seg_notice = NoticeSegment(self)
+        self.seg_weather = WeatherSegment(weather, self)
         self._segs = (
             ("record", self.seg_record),
             ("music", self.seg_music),
             ("timer", self.seg_timer),
             ("notice", self.seg_notice),
+            ("weather", self.seg_weather),
         )
         self._seg_map = dict(self._segs)
         for key, seg in self._segs:
             # 提示段不可点击：它自带生命周期，没有"收起 / 展开"的用户语义。
-            if key != "notice":
+            # 天气片点击是展开详情卡，也不走互斥互换。
+            if key == "notice":
+                pass
+            elif key == "weather":
+                seg.clicked.connect(self.weather_clicked)
+            else:
                 seg.clicked.connect(lambda k=key: self._on_clicked(k))
             seg.hide()
 
@@ -821,13 +902,19 @@ class StatusStrip(QWidget):
         timer.tick.connect(self._on_timer)
         timer.state_changed.connect(self._on_timer)
         music.state_changed.connect(self._on_music)
+        weather.data_changed.connect(self._on_weather)
         self.apply_layout()
 
     # ----- 活动段与展开态 -----
 
-    def _active_keys(self):
+    def _status_keys(self):
+        """真正「进行中 / 一次性反馈」的段（录制 | 音乐 | 倒计时 | 提示）。
+
+        天气片不计入 —— 它是闲时补位，不是进行中状态，也不参与互换优先级。"""
         keys = []
         for key, seg in self._segs:
+            if key == "weather":
+                continue
             if key == "record":
                 ok = self.seg_record.is_active()
             elif key == "music":
@@ -840,8 +927,19 @@ class StatusStrip(QWidget):
                 keys.append(key)
         return keys
 
-    def active_count(self):
-        return len(self._active_keys())
+    def _active_keys(self):
+        keys = self._status_keys()
+        if self.weather_shown():
+            keys.append("weather")
+        return keys
+
+    def weather_shown(self):
+        """天气片是否出现在状态条上：已启用且已取到数据。
+
+        与其他状态不互斥 —— 有进行中段时它收成一个小图标（展开位让给进行中
+        段），而不是整片消失。"""
+        return (self.seg_weather.has_data()
+                and self.seg_weather.svc.is_enabled())
 
     def _expanded_key(self):
         keys = self._active_keys()
@@ -859,9 +957,11 @@ class StatusStrip(QWidget):
         return keys[0]
 
     def _expanded_w(self, key):
-        """展开段宽度：提示段按文案自适应，其余段统一 FULL_W。"""
+        """展开段宽度：提示段按文案自适应，天气片恒宽，其余段统一 FULL_W。"""
         if key == "notice":
             return self.seg_notice.expanded_width()
+        if key == "weather":
+            return self.seg_weather.pill_width()
         return self.FULL_W
 
     def _layout_order(self):
@@ -902,9 +1002,13 @@ class StatusStrip(QWidget):
                 # 先留空给完成提示接手，收起态的邻居不许顶上来。
                 w = hold[2]
             elif key in keys:
-                # 提示段恒按文案宽度占位（它不参与互斥互换，出现时是额外的一段）
-                w = (self._expanded_w(key) if key in ("notice", expanded)
-                     else self.COLLAPSED)
+                # 提示段恒按文案宽度占位（它不参与互斥互换，出现时是额外的一段）；
+                # 天气片与其他段一样按「是否为展开段」取宽：独自展开时是图标 + 温度
+                # 的恒宽片，有进行中段时收成 26px 图标。
+                if key == "notice" or key == expanded:
+                    w = self._expanded_w(key)
+                else:
+                    w = self.COLLAPSED
             else:
                 continue
             ins_l, ins_r = self._seg_map[key].content_insets(w)
@@ -970,7 +1074,9 @@ class StatusStrip(QWidget):
         if self._hold:
             return False
         for key in self._prev_keys:
-            if key == "notice" or key in keys:
+            # 提示段与天气片都不是「展开位刚结束」的语义：提示自带生命周期，
+            # 天气片是闲时补位 —— 录制一开始它让位，不必给它留空。
+            if key in ("notice", "weather") or key in keys:
                 continue
             box = self._target.get(key)
             if not box or box[1] <= self.COLLAPSED:
@@ -1153,6 +1259,11 @@ class StatusStrip(QWidget):
         self._changed()
 
     def _on_music(self, _state):
+        self._changed()
+
+    def _on_weather(self, *_):
+        """天气数据 / 单位 / 开关变化：同步天气片并重排（可能整片出现或让位）。"""
+        self.seg_weather.refresh()
         self._changed()
 
     def _on_timer(self, *_):

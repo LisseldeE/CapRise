@@ -24,7 +24,7 @@
 
 ## 项目简介
 
-CapRise 是一个基于 PySide6 的 Windows 桌面快捷工具栏。全局热键 <kbd>Ctrl</kbd> + <kbd>·</kbd> 唤起悬浮胶囊，截图、翻译、标注、局域网剪切板、全局搜索等日常办公所需，一触即达。
+CapRise 是一个基于 PySide6 的 Windows 桌面快捷工具栏。全局热键 <kbd>Ctrl</kbd> + <kbd>·</kbd> 唤起悬浮胶囊，截图、录屏、翻译、标注、天气、音乐、局域网剪切板、全局搜索等日常办公所需，一触即达。
 
 ## 项目截图
 
@@ -49,22 +49,20 @@ CapRise 是一个基于 PySide6 的 Windows 桌面快捷工具栏。全局热键
 | **局域网剪贴板** | 6 位房间号组网，UDP+TCP 双通道发现、主机星型中继，断线自愈，历史回看持久化到 SQLite |
 | **全局搜索** | 输入即搜：计算、已安装软件、系统内容、全局文件（Everything），支持拼音模糊匹配 |
 | **计时器** | 番茄钟/倒计时，剩余时间在悬浮胶囊同步显示 |
+| **屏幕录制** | 主显示器全屏录制，恒定 60fps 出片，硬件优先 H.264 编码（NVENC / QSV / AMF，逐级回退 x264），录制中胶囊实时显示已录时长与停止按钮，保存目录可配置 |
+| **天气** | 基于 Open-Meteo（免 API Key），胶囊闲时显示天气图标与实时气温，点击展开详情卡：体感 / 湿度 / 风速 + 未来 6 小时预报；城市可搜索，支持摄氏华氏切换与刷新间隔 |
+| **音乐胶囊** | 读取 Windows SMTC 媒体会话，显示封面、曲名与歌手，可直接上一首 / 播放暂停 / 下一首 |
 | **取色器** | 屏幕任意位置点击取色，一键复制颜色值 |
-| **设置** | 中英切换、快捷键自定义、图标排序/显隐、开机自启、检查更新 |
+| **单实例保护** | 重复启动不会另开进程或托盘，而是唤起已运行的悬浮胶囊 |
+| **设置** | 中英切换、快捷键自定义、图标排序/显隐、录制目录、天气城市与单位、开机自启、检查更新 |
 
 ## 下载
 
 <p align="center">
   <a href="https://github.com/LisseldeE/CapRise/releases">
-    <img src="https://img.shields.io/badge/GitHub-Releases-181717?style=flat-square&logo=github&logoColor=white" alt="GitHub Releases">
-  </a>
-  &nbsp;&nbsp;
-  <a href="https://gitee.com/Lisselde_E/CapRise/releases">
-    <img src="https://img.shields.io/badge/Gitee-镜像下载-C71D23?style=flat-square&logo=gitee&logoColor=white" alt="Gitee 镜像下载">
+    <img src="https://img.shields.io/badge/GitHub%20Releases-Download-181717?style=for-the-badge&logo=github&logoColor=white" alt="GitHub Releases">
   </a>
 </p>
-
-> 💡 国内用户推荐使用 Gitee 镜像下载
 
 ## 使用方法
 
@@ -74,6 +72,8 @@ CapRise 是一个基于 PySide6 的 Windows 桌面快捷工具栏。全局热键
 - **局域网剪贴板**：右键剪贴板按钮设置 6 位房间号，同房间设备自动组网并实时同步
 - **全局搜索**：点击搜索按钮，输入内容即得计算结果、应用与文件，回车启动或打开
 - **计时器 / 取色器**：从胶囊一键启用即可
+- **屏幕录制**：点击胶囊录制按钮开始主显示器全屏录制，状态条显示已录时长，点击停止按钮保存到录制目录
+- **天气 / 音乐**：胶囊闲时显示天气片，点击展开天气详情卡；系统有媒体播放时状态条自动出现音乐片段，可直接上一首 / 暂停 / 下一首
 
 ### 全局搜索
 - **计算表达式**：直接输入算式（如 `1+2*3`、`sqrt(16)`），即时返回结果并支持一键复制
@@ -93,6 +93,9 @@ CapRise 是一个基于 PySide6 的 Windows 桌面快捷工具栏。全局热键
 - Socket（UDP + TCP，局域网剪切板）
 - SQLite（剪切板历史）
 - Everything（es.exe，全局文件搜索）
+- Open-Meteo（天气数据，免 API Key）
+- Windows Graphics Capture + FFmpeg（PyAV）（屏幕录制与硬件编码）
+- Windows SMTC（读取系统媒体会话）
 
 ## 项目结构
 
@@ -101,15 +104,20 @@ CapRise/
 ├── CapRise.py              # 主入口
 ├── modules/
 │   ├── capsule.py          # 悬浮胶囊面板
+│   ├── status_strip.py     # 胶囊状态条（录制 / 音乐 / 倒计时 / 天气）
 │   ├── screenshot.py       # 截屏
 │   ├── annotation.py       # 标注
 │   ├── translate.py        # 区域翻译（OCR + 在线翻译）
 │   ├── search.py           # 全局搜索
 │   ├── clipboard_*.py      # 局域网剪切板（管理/网络/监听/历史/面板/房间配置）
 │   ├── timer.py            # 计时器
+│   ├── recorder.py         # 屏幕录制（WGC 采集 + 硬件优先 H.264 编码）
+│   ├── music.py            # 音乐胶囊（Windows SMTC 会话与播放控制）
+│   ├── weather.py          # 天气服务与详情卡片
 │   ├── color_picker.py     # 取色器
 │   ├── settings.py         # 设置对话框
 │   ├── hotkey.py           # 全局快捷键
+│   ├── single_instance.py  # 单实例保护
 │   ├── config.py / i18n.py # 配置管理与国际化
 │   └── ...
 ```

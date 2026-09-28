@@ -57,7 +57,7 @@ def check_update(parent=None):
 
     Always fetches Config.UPDATE_URL (the GitHub Pages plain-text version
     file), decodes its body into a version, and compares it against the local
-    one — no GitHub/Gitee branching needed.
+    one — no release-API calls needed.
     """
     try:
         req = urllib.request.Request(Config.UPDATE_URL)
@@ -87,11 +87,8 @@ def check_update(parent=None):
             box.addButton(I18n.tr("about_no"), QMessageBox.NoRole)
             box.exec()
             if box.clickedButton() == yes:
-                # Download page by language: Gitee for Chinese, GitHub else.
-                releases_url = (Config.GITEE_RELEASES
-                                if I18n.get_language() == "zh_CN"
-                                else Config.GITHUB_RELEASES)
-                QDesktopServices.openUrl(QUrl(releases_url))
+                # 更新跳转不分语言，一律指向 GitHub（Gitee 已关闭）。
+                QDesktopServices.openUrl(QUrl(Config.GITHUB_RELEASES))
         else:
             _show_message(parent, I18n.tr("about_check_update"),
                           I18n.tr("about_latest"), QMessageBox.Information)

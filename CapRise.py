@@ -116,18 +116,18 @@ class CapRiseApp:
         # Created before connect_signals so the button wiring can reference it.
         self.clipboard_mgr = ClipboardManager(self.capsule)
 
-        # A second launch asked this existing instance to surface the capsule.
+        # 走守卫注册（而不是直接连 activated）：界面就绪前收到的唤起请
+        # 求会被补发。
         if guard is not None:
-            guard.activated.connect(self._on_second_instance)
+            guard.connect_activation(self._on_second_instance)
 
         self.setup_tray()
         self.setup_hotkey()
         self.connect_signals()
 
     def _on_second_instance(self):
-        """Another instance started and yielded to us: bring the capsule to
-        the front so the user's second launch is not a no-op."""
-        self.toggle_capsule()
+        """另一次启动把胶囊让给了我们：把它带回到用户面前。"""
+        self.surface_capsule()
 
     def setup_tray(self):
         self.tray_icon = QSystemTrayIcon()
@@ -233,6 +233,20 @@ class CapRiseApp:
                     self.clipboard_mgr.show_card()
         else:
             self.capsule.toggle_visibility()
+
+    def surface_capsule(self):
+        """显示胶囊，只显示不切换 —— 第二次启动走这条路径，胶囊已显示时不
+        能被 toggle 收掉。"""
+        if self.active_overlay is not None:
+            return
+        if self._search_window is not None and self._search_window.isVisible():
+            self._pending_search = False
+            self._search_window.close_search()
+            return
+        self.capsule.show_capsule()
+        if (self.clipboard_mgr.is_enabled()
+                and self.clipboard_mgr.is_expanded()):
+            self.clipboard_mgr.show_card()
 
     def _on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.DoubleClick:
@@ -370,16 +384,15 @@ class CapRiseApp:
 
 
 if __name__ == "__main__":
-    # Create QApplication first so the guard's sockets have a runnable
-    # object, then decide single-instance ownership BEFORE building the
-    # tray / hotkeys / clipboard listeners.
+    # 先建 QApplication，再在建托盘 / 热键 / 剪切板之前定下实例归属。
     app = QApplication(sys.argv)
     guard = SingleInstance()
     if not guard.is_first_instance:
-        # A healthy instance is already running: surface its capsule and
-        # exit quietly. This avoids duplicate tray icons, failed hotkey
-        # registration, and conflicting clipboard / LAN-sync listeners.
-        poke_existing_instance()
-        sys.exit(0)
+        # 已有实例：把唤起请求交给它后安静退出，避免双托盘 / 热键冲突。
+        if poke_existing_instance():
+            sys.exit(0)
+        # 没人应答说明拥有者刚退出，自己接管，别静默地什么都没启动。
+        if not guard.take_over():
+            sys.exit(0)
     main = CapRiseApp(app=app, guard=guard)
     sys.exit(main.run())

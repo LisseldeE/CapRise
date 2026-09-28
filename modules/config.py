@@ -22,14 +22,12 @@ class Config:
 
     # Repository info (used by the About page / links).
     GITHUB_REPO = "LisseldeE/CapRise"
-    GITEE_REPO = "Lisselde_E/CapRise"
 
     # Latest version is served as a plain-text file on GitHub Pages
     # (https://lisseldee.github.io/version/caprise) so the update checker
-    # avoids Gitee/GitHub raw hotlink bans and public-API rate limits.
+    # avoids GitHub raw hotlink bans and public-API rate limits.
     UPDATE_URL = "https://lisseldee.github.io/version/caprise"
     GITHUB_RELEASES = f"https://github.com/{GITHUB_REPO}/releases"
-    GITEE_RELEASES = f"https://gitee.com/{GITEE_REPO}/releases"
 
     def __new__(cls):
         if cls._instance is None:

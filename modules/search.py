@@ -285,6 +285,8 @@ _APP_SETTINGS = [
     ("general", "常规", "General", ["通用", "工具", "隐藏", "常规", "general", "tools"]),
     ("hotkey", "快捷键", "Hotkeys", ["快捷键", "热键", "hotkey", "shortcut", "键位"]),
     ("translate", "翻译", "Translate", ["翻译", "翻译语言", "translate", "language", "译文"]),
+    ("record", "录制", "Record", ["录制", "录屏", "保存位置", "record", "recording", "save"]),
+    ("weather", "天气", "Weather", ["天气", "气温", "城市", "weather", "temperature", "city"]),
     ("system", "系统", "System", ["系统", "开机", "自启动", "更新", "system", "autostart", "update"]),
     ("about", "关于", "About", ["关于", "版本", "更新", "about", "version", "check update"]),
 ]

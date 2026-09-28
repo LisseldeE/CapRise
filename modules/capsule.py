@@ -31,6 +31,7 @@ from modules.timer import TimerManager, TimerNoticeOverlay
 from modules.music import MusicManager
 from modules.recorder import ScreenRecorder
 from modules.status_strip import StatusStrip, RecordMiniPill
+from modules.weather import WeatherService, WeatherCard
 
 # Windows constants
 WM_KEYDOWN = 0x0100
@@ -103,6 +104,8 @@ class CapsuleBar(QWidget):
         self._strip_w = 0.0
         self._full_strip_w = 0
         self._music_enabled = False
+        # 天气详情卡（独立顶层窗，点天气片才创建）
+        self._weather_card = None
         # mini 态（录制中收起成的小胶囊）：miniT 0=完整胶囊、1=mini，
         # 由 _mini_width_now() 把窗口宽度在完整宽度与 mini 宽度间插值。
         self._mini_on = False
@@ -161,10 +164,16 @@ class CapsuleBar(QWidget):
         # 音乐管理器（SMTC）：同样只做状态源，展示交给状态条。
         self.music = MusicManager(self)
 
+        # 天气数据源：闲时在胶囊栏左侧补位显示天气片。抓取走后台线程，界面
+        # 只读缓存结果；关闭 / 未设城市时不做任何请求。
+        self.weather = WeatherService(self)
+
         # 进行中状态条（录制 | 音乐 | 倒计时）并入主胶囊栏左侧。
-        self.status = StatusStrip(self.timer, self.music, self)
+        self.status = StatusStrip(self.timer, self.music, self.weather, self)
         self.status.layout_changed.connect(self._on_status_layout)
         self.status.stop_record_requested.connect(self.stop_record)
+        self.status.weather_clicked.connect(self._on_weather_clicked)
+        self.weather.data_changed.connect(self._on_weather_data)
 
         # 录屏：状态条展示录制中，完成 / 失败通过 _show_notice 就地提示。
         self.recorder = ScreenRecorder(self)
@@ -255,6 +264,10 @@ class CapsuleBar(QWidget):
             self.music.start()
         self.status.set_music_enabled(self._music_enabled)
 
+        # 天气服务：启用则起定时抓取（后台线程，失败不影响界面）。
+        if self.weather.is_enabled():
+            self.weather.start()
+
     # ----- 状态条宽度 -----
 
     def _on_status_layout(self):
@@ -264,6 +277,12 @@ class CapsuleBar(QWidget):
         段才会改变目标宽度，此时平滑过渡。"""
         self._full_strip_w = self.status.content_width()
         self._animate_strip_width(self._full_strip_w)
+        # 天气片整体不显示了（关闭 / 无数据）→ 详情卡一并收掉；仍在显示时它可能
+        # 从展开态收成了小图标、位置也跟着挪了，把卡片重新对位到天气片下方。
+        if not self.status.weather_shown():
+            self._dismiss_weather_card()
+        elif self._weather_card is not None and self._weather_card.isVisible():
+            self._weather_card.move_to(*self._weather_card_pos())
 
     def _get_strip_w(self):
         return self._strip_w
@@ -308,6 +327,51 @@ class CapsuleBar(QWidget):
         if screen is None:
             screen = self._get_screen_geo()
         return (screen.width() - self.width()) // 2 + screen.x()
+
+    # ----- 天气 -----
+
+    def _on_weather_clicked(self):
+        """点天气片：已展开则收起，否则在胶囊下方展开详情卡。"""
+        if self._weather_card is not None and self._weather_card.isVisible():
+            self._dismiss_weather_card()
+            return
+        self._open_weather_card()
+
+    def _weather_card_pos(self):
+        """详情卡左上角的屏幕坐标：水平对齐天气片中心，夹在屏幕内。"""
+        seg = self.status.seg_weather
+        center = seg.mapToGlobal(QPoint(seg.width() // 2, 0)).x()
+        geo = self._get_screen_geo()
+        w = WeatherCard.W
+        x = max(geo.x() + 8, min(center - w // 2, geo.x() + geo.width() - w - 8))
+        y = self.mapToGlobal(QPoint(0, self.height())).y() + 8
+        y = max(geo.y() + 8, min(y, geo.y() + geo.height() - WeatherCard.H - 8))
+        return x, y
+
+    def _open_weather_card(self):
+        """在天气片正下方弹出详情卡（天气片收成小图标时也照此对位）。"""
+        if self._weather_card is None:
+            self._weather_card = WeatherCard()
+        self._weather_card.set_data(self.weather.data())
+        self._weather_card.popup_at(*self._weather_card_pos())
+
+    def _on_weather_data(self):
+        """数据刷新：卡片可见时同步重绘（收起态下无需处理）。"""
+        if self._weather_card is not None and self._weather_card.isVisible():
+            self._weather_card.set_data(self.weather.data())
+
+    def _dismiss_weather_card(self, animated=True):
+        """收起详情卡；不可见的卡片直接忽略。"""
+        if self._weather_card is None or not self._weather_card.isVisible():
+            return
+        if animated:
+            self._weather_card.dismiss()
+        else:
+            self._weather_card.hide()
+
+    def sync_weather(self):
+        """设置页改动后调用：按新配置重启 / 停止天气抓取。"""
+        self.weather.apply_config()
 
     # ----- 录屏 -----
 
@@ -656,7 +720,10 @@ class CapsuleBar(QWidget):
         self._mini_anim.start()
 
     def _can_mini(self):
-        """录制中收起 → 进入 mini 态（后续可加设置项在此处做开关）。"""
+        """录制中收起 → 进入 mini 态；设置页关掉「常驻小胶囊」则不走这条路，
+        收起与展开都按普通流程来（录制仍在后台继续）。"""
+        if not Config().get("record_mini_capsule_enabled", True):
+            return False
         return self.recorder.is_recording() and not self._mini_on
 
     def is_mini(self):
@@ -848,6 +915,9 @@ class CapsuleBar(QWidget):
             self.recorder.stop()
         self.music.stop()
         self.timer.shutdown()
+        # 天气：停掉定时器并收起详情卡，避免退出后残留顶层窗。
+        self.weather.stop()
+        self._dismiss_weather_card(animated=False)
 
     def event(self, event):
         """ESC key when the capsule itself has keyboard focus."""
@@ -892,6 +962,8 @@ class CapsuleBar(QWidget):
         self.status.clear_hover()
         # 完成提示是一次性的：胶囊栏收起后不能把它留到下次呼出。
         self.status.dismiss_notice()
+        # 详情卡同理：窗口已隐藏，动画来不及跑就直接落掉。
+        self._dismiss_weather_card(animated=False)
         self._animating = False
         self._pending_hide = False
         super().hideEvent(event)
@@ -981,6 +1053,9 @@ class CapsuleBar(QWidget):
         快捷键 / 关闭按钮这类显式收起才真正隐藏（录制继续在后台跑）。"""
         if not self.isVisible():
             return
+
+        # 收起（含收成 mini）：详情卡是独立顶层窗，必须一并收掉。
+        self._dismiss_weather_card()
 
         if self._mini_on:
             if self._outside_click:

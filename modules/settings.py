@@ -1,6 +1,6 @@
 """
 设置面板
-分栏设置对话框，含通用/翻译/系统/关于页
+分栏设置对话框，含通用/翻译/录制/系统/关于页
 Copyright (c) 2026 Lisselde_E <Lisselde.E@outlook.com>.
 Licensed under the MIT License.
 """
@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox,
     QListWidget, QListWidgetItem, QStackedWidget, QWidget, QFrame,
     QApplication, QGraphicsOpacityEffect, QAbstractItemView, QKeySequenceEdit,
-    QPushButton, QLineEdit, QRadioButton
+    QPushButton, QLineEdit, QRadioButton, QFileDialog, QCompleter
 )
 from PySide6.QtCore import (
     Qt, QSize, QByteArray, QRectF, QPropertyAnimation, QEasingCurve, Signal,
@@ -27,6 +27,7 @@ from modules.config import Config
 from modules.i18n import I18n
 from modules.about import AboutPage
 from modules.hotkey import HOTKEY_SPECS, qkeysequence_to_win, is_valid_hotkey
+from modules.recorder import record_dir
 from modules.translate import _TARGET_LANGS, _SOURCE_LANGS
 
 # Dotted grip glyph used as the drag handle on each reorder row.
@@ -52,6 +53,39 @@ EYE_CLOSED_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
   <line x1="4" y1="4" x2="20" y2="20" stroke="currentColor"
         stroke-width="1.6" stroke-linecap="round"/>
 </svg>"""
+
+
+# 天气页城市下拉的候选：「显示名 → 查询名」。国内城市直接用中文名（Open-Meteo
+# 的 geocoding 对国内城市有原生索引）；国外城市一律用英文名 —— 中文名在它的
+# 检索里要么命中不了（纽约 / 首尔 / 台北 / 西雅图），要么命中同名的小地方
+# （"伦敦" → 加拿大安大略省，"罗马" → 澳大利亚昆士兰，"奥克兰" → 美国加州）。
+# 另外 "New York" 会落到内布拉斯加州的 York，得写成 "New York City"。
+_WEATHER_CITIES = [
+    ("北京", "北京"), ("上海", "上海"), ("广州", "广州"), ("深圳", "深圳"),
+    ("杭州", "杭州"), ("南京", "南京"), ("苏州", "苏州"), ("成都", "成都"),
+    ("重庆", "重庆"), ("武汉", "武汉"), ("西安", "西安"), ("天津", "天津"),
+    ("长沙", "长沙"), ("郑州", "郑州"), ("青岛", "青岛"), ("宁波", "宁波"),
+    ("厦门", "厦门"), ("福州", "福州"), ("济南", "济南"), ("合肥", "合肥"),
+    ("大连", "大连"), ("沈阳", "沈阳"), ("哈尔滨", "哈尔滨"), ("长春", "长春"),
+    ("昆明", "昆明"), ("贵阳", "贵阳"), ("南宁", "南宁"), ("石家庄", "石家庄"),
+    ("太原", "太原"), ("兰州", "兰州"), ("乌鲁木齐", "乌鲁木齐"),
+    ("呼和浩特", "呼和浩特"), ("银川", "银川"), ("西宁", "西宁"),
+    ("拉萨", "拉萨"), ("海口", "海口"), ("三亚", "三亚"), ("无锡", "无锡"),
+    ("佛山", "佛山"), ("温州", "温州"), ("泉州", "泉州"),
+    ("香港", "香港"), ("澳门", "澳门"), ("台北", "Taipei"),
+    ("东京", "Tokyo"), ("首尔", "Seoul"), ("新加坡", "Singapore"),
+    ("曼谷", "Bangkok"), ("吉隆坡", "Kuala Lumpur"), ("雅加达", "Jakarta"),
+    ("马尼拉", "Manila"), ("迪拜", "Dubai"), ("孟买", "Mumbai"),
+    ("新德里", "Delhi"), ("伦敦", "London"), ("巴黎", "Paris"),
+    ("柏林", "Berlin"), ("罗马", "Rome"), ("马德里", "Madrid"),
+    ("阿姆斯特丹", "Amsterdam"), ("莫斯科", "Moscow"),
+    ("纽约", "New York City"),
+    ("洛杉矶", "Los Angeles"), ("旧金山", "San Francisco"),
+    ("西雅图", "Seattle"), ("芝加哥", "Chicago"), ("多伦多", "Toronto"),
+    ("温哥华", "Vancouver"), ("悉尼", "Sydney"), ("墨尔本", "Melbourne"),
+    ("奥克兰", "Auckland"), ("开罗", "Cairo"), ("圣保罗", "Sao Paulo"),
+    ("墨西哥城", "Mexico City"),
+]
 
 
 def _get_app_cmd():
@@ -775,6 +809,18 @@ class SettingsDialog(QDialog):
         self.lang_combo.currentIndexChanged.connect(self._persist)
         self.autostart_check.toggled.connect(self._persist)
         self.music_check.toggled.connect(self._on_music_toggled)
+        self.record_mini_check.toggled.connect(self._on_record_mini_toggled)
+        self.weather_city_combo.activated.connect(self._on_weather_city)
+        self.weather_city_combo.lineEdit().editingFinished.connect(
+            self._on_weather_city)
+        self.weather_check.toggled.connect(self._persist_weather)
+        self.weather_unit_combo.currentIndexChanged.connect(self._persist_weather)
+        self.weather_refresh_combo.currentIndexChanged.connect(
+            self._persist_weather)
+        # 抓取完成 / 失败后刷新状态文案（对话框销毁时 Qt 自动断开）。
+        if self._capsule is not None:
+            self._capsule.weather.data_changed.connect(
+                self._update_weather_status)
         self.translate_provider_combo.currentIndexChanged.connect(self._persist)
         self.translate_source_combo.currentIndexChanged.connect(self._persist)
         self.translate_target_combo.currentIndexChanged.connect(self._persist)
@@ -815,6 +861,10 @@ class SettingsDialog(QDialog):
         else:
             Config().set("music_capsule_enabled", bool(checked))
 
+    def _on_record_mini_toggled(self, checked):
+        """录制常驻小胶囊开关：立即持久化（胶囊栏收起时读该值判定）。"""
+        Config().set("record_mini_capsule_enabled", bool(checked))
+
     def setup_ui(self):
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -825,6 +875,8 @@ class SettingsDialog(QDialog):
             ("general", I18n.tr("settings_general")),
             ("hotkey", I18n.tr("hotkey")),
             ("translate", I18n.tr("settings_translate")),
+            ("record", I18n.tr("settings_record")),
+            ("weather", I18n.tr("settings_weather")),
             ("system", I18n.tr("settings_system")),
             ("about", I18n.tr("settings_about")),
         ])
@@ -840,6 +892,8 @@ class SettingsDialog(QDialog):
         self.stack.addWidget(self._build_general_page())
         self.stack.addWidget(self._build_hotkey_page())
         self.stack.addWidget(self._build_translate_page())
+        self.stack.addWidget(self._build_record_page())
+        self.stack.addWidget(self._build_weather_page())
         self.stack.addWidget(self._build_system_page())
         self.stack.addWidget(AboutPage())
 
@@ -1256,6 +1310,182 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         return page
 
+    def _build_record_page(self):
+        """录制页：保存位置 + 录制中常驻小胶囊。"""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(18)
+
+        # 保存位置：整行就是按钮，点一下换目录（选完立即写 config.json，
+        # 下一次录制即落到新目录）。
+        dir_row = QHBoxLayout()
+        dir_row.setSpacing(12)
+        dir_label = QLabel(I18n.tr("record_dir"))
+        dir_label.setFixedWidth(90)
+        dir_row.addWidget(dir_label)
+        self.record_dir_btn = QPushButton()
+        self.record_dir_btn.setFixedHeight(30)
+        self.record_dir_btn.setCursor(Qt.PointingHandCursor)
+        self.record_dir_btn.setFocusPolicy(Qt.NoFocus)
+        self.record_dir_btn.setStyleSheet(
+            "QPushButton { background: transparent; border: 1px solid"
+            " rgba(128,128,128,60); border-radius: 8px; color: palette(text);"
+            " font-size: 13px; text-align: left; padding-left: 10px; }"
+            "QPushButton:hover { background: rgba(128,128,128,45); }")
+        self.record_dir_btn.clicked.connect(self._pick_record_dir)
+        dir_row.addWidget(self.record_dir_btn, 1)
+        layout.addLayout(dir_row)
+
+        dir_hint = QLabel(I18n.tr("record_dir_hint"))
+        dir_hint.setStyleSheet("font-size: 11px; color: #868e96;")
+        dir_hint.setWordWrap(True)
+        layout.addWidget(dir_hint)
+
+        self.record_mini_check = QCheckBox()
+        layout.addLayout(
+            self._row(I18n.tr("record_mini_capsule"), self.record_mini_check))
+        mini_hint = QLabel(I18n.tr("record_mini_capsule_hint"))
+        mini_hint.setStyleSheet("font-size: 11px; color: #868e96;")
+        mini_hint.setWordWrap(True)
+        layout.addWidget(mini_hint)
+
+        layout.addStretch()
+        return page
+
+    def _pick_record_dir(self):
+        """换录制保存目录：取消则不动，选好即持久化。"""
+        path = QFileDialog.getExistingDirectory(
+            self, I18n.tr("record_dir_pick_title"), str(record_dir()))
+        if not path:
+            return
+        Config().set("record_dir", path)
+        self._set_record_dir_text(path)
+
+    def _set_record_dir_text(self, path):
+        """把当前目录显示在按钮上；路径过长时按钮裁切，悬停看全路径。"""
+        self.record_dir_btn.setText(path)
+        self.record_dir_btn.setToolTip(path)
+
+    def _build_weather_page(self):
+        """天气页：启用开关 + 城市 + 单位 + 刷新间隔 + 当前状态。"""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(18)
+
+        self.weather_check = QCheckBox()
+        layout.addLayout(
+            self._row(I18n.tr("weather_enabled"), self.weather_check))
+
+        self.weather_city_combo = QComboBox()
+        self.weather_city_combo.setEditable(True)
+        self.weather_city_combo.setInsertPolicy(QComboBox.NoInsert)
+        self.weather_city_combo.setFixedHeight(30)
+        self.weather_city_combo.lineEdit().setPlaceholderText(
+            I18n.tr("weather_city_ph"))
+        for label, query in _WEATHER_CITIES:
+            self.weather_city_combo.addItem(label, query)
+        # 可编辑 + 子串匹配：点箭头是列表直选，打字则在下拉里按包含关系过滤
+        # （输入框里始终是可以自由输入的，列表外的城市照旧按名字去检索）。
+        completer = self.weather_city_combo.completer()
+        completer.setCompletionMode(QCompleter.PopupCompletion)
+        completer.setFilterMode(Qt.MatchContains)
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        layout.addLayout(
+            self._row(I18n.tr("weather_city"), self.weather_city_combo))
+        city_hint = QLabel(I18n.tr("weather_city_hint"))
+        city_hint.setStyleSheet("font-size: 11px; color: #868e96;")
+        city_hint.setWordWrap(True)
+        layout.addWidget(city_hint)
+
+        self.weather_unit_combo = QComboBox()
+        self.weather_unit_combo.addItem(I18n.tr("weather_unit_c"), "c")
+        self.weather_unit_combo.addItem(I18n.tr("weather_unit_f"), "f")
+        layout.addLayout(
+            self._row(I18n.tr("weather_unit"), self.weather_unit_combo))
+
+        self.weather_refresh_combo = QComboBox()
+        for minutes in (5, 15, 30, 60):
+            self.weather_refresh_combo.addItem(
+                I18n.tr("weather_refresh_min", n=minutes), minutes)
+        layout.addLayout(
+            self._row(I18n.tr("weather_refresh"), self.weather_refresh_combo))
+
+        self.weather_status = QLabel("")
+        self.weather_status.setStyleSheet("font-size: 11px; color: #868e96;")
+        self.weather_status.setWordWrap(True)
+        layout.addWidget(self.weather_status)
+
+        layout.addStretch()
+        return page
+
+    def _city_query(self):
+        """当前城市名：输入框文本与某个下拉项完全一致时取该项的查询名（国外城市
+        的中文显示名与查询名不同），否则就是用户手输的城市名。
+
+        不能直接读 currentData()：可编辑下拉在自由输入时不会把 currentIndex
+        挪到 -1，它仍停在上一次选中项上，读出来是旧城市的查询名，用户输入的
+        列表外城市会被静默丢掉。"""
+        combo = self.weather_city_combo
+        text = combo.currentText().strip()
+        index = combo.currentIndex()
+        if 0 <= index < combo.count() and combo.itemText(index) == text:
+            return str(combo.itemData(index) or text)
+        return text
+
+    def _on_weather_city(self):
+        """城市改动（下拉选中 / 输入后回车或失焦）：写入并触发重新抓取。"""
+        city = self._city_query()
+        if Config().get("weather_city", "") != city:
+            Config().set("weather_city", city)
+        if self._capsule is not None:
+            self._capsule.sync_weather()
+        self._update_weather_status()
+
+    def _persist_weather(self, *_):
+        """启用 / 单位 / 间隔改动：立即持久化并同步给天气服务。"""
+        Config().set("weather_enabled", bool(self.weather_check.isChecked()))
+        Config().set("weather_unit", self.weather_unit_combo.currentData())
+        minutes = self.weather_refresh_combo.currentData()
+        Config().set("weather_refresh_min", int(minutes or 15))
+        if self._capsule is not None:
+            self._capsule.sync_weather()
+        self._update_weather_status()
+
+    def _update_weather_status(self, *_):
+        """状态行：按服务当前状态给出明确的「已关闭 / 未设城市 / 获取中 /
+        正常 / 失败」文案。"""
+        if not hasattr(self, "weather_status"):
+            return
+        svc = self._capsule.weather if self._capsule is not None else None
+        if svc is None:
+            self.weather_status.setText("")
+            return
+        if not self.weather_check.isChecked():
+            text = I18n.tr("weather_status_off")
+        elif not self._city_query():
+            text = I18n.tr("weather_status_no_city")
+        elif svc.error():
+            text = self._weather_error_text(svc.error())
+        elif svc.has_data():
+            text = I18n.tr("weather_status_ok", city=svc.resolved_city())
+        else:
+            text = I18n.tr("weather_status_loading")
+        self.weather_status.setText(text)
+
+    def _weather_error_text(self, error):
+        """把底层异常转成一句能读懂的话：城市不存在 / 网络超时 / 其它网络异常。
+
+        原始异常（"<urlopen error _ssl.c:1063: The handshake operation timed
+        out>"）直接铺在状态行上又长又像在报错。"""
+        if error == I18n.tr("weather_city_not_found"):
+            return error
+        low = error.lower()
+        if "timed out" in low or "timeout" in low:
+            return I18n.tr("weather_status_timeout")
+        return I18n.tr("weather_status_failed")
+
     def _build_system_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -1316,6 +1546,32 @@ class SettingsDialog(QDialog):
         self.anim_vertical.setChecked(anim != "dynamic")
         self.anim_dynamic.setChecked(anim == "dynamic")
         self._anim_preview.set_mode(anim)
+
+        self._set_record_dir_text(str(record_dir()))
+        self.record_mini_check.setChecked(
+            bool(config.get("record_mini_capsule_enabled", True)))
+
+        self.weather_check.setChecked(bool(config.get("weather_enabled", True)))
+        city = str(config.get("weather_city", "") or "")
+        index = self.weather_city_combo.findData(city)
+        if index >= 0:
+            # 命内置列表：显示中文名，存的仍是查询名
+            self.weather_city_combo.setCurrentIndex(index)
+        else:
+            self.weather_city_combo.setCurrentText(city)
+        index = self.weather_unit_combo.findData(config.get("weather_unit", "c"))
+        if index < 0:
+            index = 0
+        self.weather_unit_combo.setCurrentIndex(index)
+        try:
+            minutes = int(config.get("weather_refresh_min", 15))
+        except (TypeError, ValueError):
+            minutes = 15
+        index = self.weather_refresh_combo.findData(minutes)
+        if index < 0:
+            index = self.weather_refresh_combo.findData(15)
+        self.weather_refresh_combo.setCurrentIndex(max(0, index))
+        self._update_weather_status()
 
     def _persist(self, *_):
         lang = self.lang_combo.currentData()

@@ -197,11 +197,13 @@ ICON_NEXT = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill=
 
 # --- Record status icons ---
 
-# Stop: a filled rounded square (stroke is thickened to a solid block, since
-# make_pixmap only recolors stroke= and a literal fill="currentColor" would
-# not resolve).
-ICON_STOP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
-  <rect x="6.5" y="6.5" width="11" height="11" rx="2"/>
+# Stop: a filled rounded square. make_pixmap only recolors stroke= (a literal
+# fill="currentColor" would not resolve), so the block is made by thickening
+# the stroke until the hole closes: an 8x8 rect with stroke-width 8 leaves no
+# inner area and spans 4..20, matching the previous outline's footprint
+# (rx 0.5 + stroke/2 = 4.5 outer corner radius, as before).
+ICON_STOP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="8" y="8" width="8" height="8" rx="0.5"/>
 </svg>"""
 
 # Record: outer ring + solid centre dot, used as the recording notice badge.
@@ -209,6 +211,78 @@ ICON_RECORD = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fil
   <circle cx="12" cy="12" r="9"/>
   <circle cx="12" cy="12" r="1" stroke-width="6"/>
 </svg>"""
+
+# --- Weather icons (single-colour outline, so make_pixmap can recolour them) ---
+
+ICON_WEATHER_CLEAR = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="12" cy="12" r="4"/>
+  <path d="M12 2v2"/>
+  <path d="M12 20v2"/>
+  <path d="m4.93 4.93 1.41 1.41"/>
+  <path d="m17.66 17.66 1.41 1.41"/>
+  <path d="M2 12h2"/>
+  <path d="M20 12h2"/>
+  <path d="m6.34 17.66-1.41 1.41"/>
+  <path d="m19.07 4.93-1.41 1.41"/>
+</svg>"""
+
+ICON_WEATHER_PARTLY = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M12 2v2"/>
+  <path d="m4.93 4.93 1.41 1.41"/>
+  <path d="M20 12h2"/>
+  <path d="m19.07 4.93-1.41 1.41"/>
+  <path d="M15.947 12.65a4 4 0 0 0-5.925-4.128"/>
+  <path d="M13 22H7a5 5 0 1 1 4.9-6H13a3 3 0 0 1 0 6Z"/>
+</svg>"""
+
+ICON_WEATHER_CLOUDY = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M17.5 21H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>
+  <path d="M22 10a3 3 0 0 0-3-3h-2.207a5.502 5.502 0 0 0-10.702.5"/>
+</svg>"""
+
+ICON_WEATHER_FOG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/>
+  <path d="M16 17H7"/>
+  <path d="M17 21H9"/>
+</svg>"""
+
+ICON_WEATHER_RAIN = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/>
+  <path d="M16 14v6"/>
+  <path d="M8 14v6"/>
+  <path d="M12 16v6"/>
+</svg>"""
+
+ICON_WEATHER_SNOW = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/>
+  <path d="M8 15h.01"/>
+  <path d="M8 19h.01"/>
+  <path d="M12 17h.01"/>
+  <path d="M12 21h.01"/>
+  <path d="M16 15h.01"/>
+  <path d="M16 19h.01"/>
+</svg>"""
+
+ICON_WEATHER_THUNDER = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M6 16.326A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 .5 8.973"/>
+  <path d="m13 12-3 5h4l-3 5"/>
+</svg>"""
+
+# 天气条件名 -> 单色图标。条件名由 weather.condition_of() 从 WMO 天气码推出。
+_WEATHER_ICONS = {
+    "clear": ICON_WEATHER_CLEAR,
+    "partly": ICON_WEATHER_PARTLY,
+    "cloudy": ICON_WEATHER_CLOUDY,
+    "fog": ICON_WEATHER_FOG,
+    "rain": ICON_WEATHER_RAIN,
+    "snow": ICON_WEATHER_SNOW,
+    "thunder": ICON_WEATHER_THUNDER,
+}
+
+
+def weather_icon(condition):
+    """天气条件名对应的图标；未知条件回退到「多云」。"""
+    return _WEATHER_ICONS.get(condition, ICON_WEATHER_CLOUDY)
 
 
 def icon_svg(name):
